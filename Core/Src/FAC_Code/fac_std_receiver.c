@@ -42,11 +42,8 @@ static void FAC_std_receiver_is_connected(void) {
 	if (!receiver.connected) {	// I only check if it is not connected yet
 		uint8_t receiverConnected = FALSE;
 		static uint8_t channelToCheck = 0;
-		if (channelToCheck == 0)
-			channelToCheck++;
-		else
-			channelToCheck = ((channelToCheck + 1)
-					% (RECEIVER_CHANNELS_NUMBER + 1));
+		/* cycle the channel to check inside [1, RECEIVER_CHANNELS_NUMBER], channels are 1 based */
+		channelToCheck = (channelToCheck % RECEIVER_CHANNELS_NUMBER) + 1;
 		if (FAC_std_receiver_GET_channel(channelToCheck) != 0)
 			receiverConnected = TRUE;
 
@@ -140,8 +137,12 @@ uint8_t FAC_std_receiver_GET_is_connected(void) {
 /*
  * @brief calculate the new value of the requested channel
  * @retval return the new channel value if it was correct, otherwise return the old value
+ * @IMPORTANT	chNumber is 1 based, an out of range channel returns 0 without touching any receiver object
  */
 uint16_t FAC_std_receiver_GET_channel(uint8_t chNumber) {
+	if (chNumber < 1 || chNumber > RECEIVER_CHANNELS_NUMBER)
+		return 0;	// out of range: avoid any out of bounds read / write on the channels arrays
+
 	switch (receiver.type) {// calculate channel / channels according to the type of receiver in use
 	case RECEIVER_TYPE_PWM:
 		if (chNumber <= PWM_RECEIVER_CHANNELS_NUMBER)// update the channel only if the channel exist on this rx type (else it returns the channel number stored on std_receiver without update)
