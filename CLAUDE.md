@@ -62,7 +62,7 @@ RC receiver ──EXTI+TIM2──> fac_pwm_receiver / fac_ppm_receiver
 `FAC_STATE_DISARMED` → `FAC_STATE_NORMAL` → `FAC_STATE_CUTOFF`.
 
 - Boot is always DISARMED. Arming additionally **requires the receiver to be seen connected** (`FAC_std_receiver_GET_is_connected()` — true once any channel reads non-zero). With `FAC_SETTINGS_CODE_ARMING_CHANNEL == 0` it arms immediately once connected; otherwise the channel must exceed `ARMING_THRESHOLD` (80%).
-- CUTOFF is latched (no transition out) once Vbat stays below `CUTOFF_VOLTAGE_MV × cellCount` for `CUTOFF_DETECTION_TIME` seconds.
+- CUTOFF is latched (no transition out) once the **cell** voltage stays at or below `CUTOFF_VOLTAGE_MV` for `CUTOFF_DETECTION_TIME` seconds. `LOW_BATTERY_VOLTAGE_MV` and `CUTOFF_VOLTAGE_MV` are both per-cell and are compared against `FAC_battery_GET_cell_voltage()`. Special cases are explicit: a `0` threshold (user-disabled) and `BATTERY_TYPE_USB` never cut off, while `BATTERY_TYPE_NONE` (unknown cell count → cells cannot be protected) always does.
 - LED patterns and motor "beeps" per state are driven by the `*_LED_PERIOD` / `*_TONE_PERIOD` defines in `config.h`.
 
 ### Settings + EEPROM + USB protocol
@@ -89,7 +89,7 @@ Adding a setting: append to the enum before `FAC_SETTINGS_CODE_LAST`, append the
 
 - **`fac_servo`**: TIM3 CH3/CH4, prescaler tuned for **1000 ticks per ms**, so `CCR = min_us_value + p` works at any frequency; period is recomputed as `(1000 * SERVO_RESOLUTION) / fs`. Servos are disabled (CCR = 0) unless mapped and armed.
 - **`fac_adc`**: 3 channels DMA-scanned (VBAT, AUX, VREFINT). VDDA is derived from the factory `VREFINT_CAL_ADDR` calibration value, which is what makes battery readings accurate across supply variation.
-- **`fac_battery`**: `voltage_divider_ratio = 7692`; cell count is auto-detected once at boot from Vbat (USB ≈ 5.1 V is detected separately). A user-settable `BATTERY_CALIBRATION` offset (stored as signed in a `uint16_t` slot) is added to readings.
+- **`fac_battery`**: `voltage_divider_ratio = 7692`; cell count is auto-detected once at boot from Vbat (USB ≈ 5.1 V is detected separately) and stored in `battery.type`. A user-settable `BATTERY_CALIBRATION` offset (stored as signed in a `uint16_t` slot) is added to readings. `enum BATTERY_TYPE` doubles as the cell count for `1S..4S` (values 1–4), which is what `FAC_battery_GET_cell_voltage()` divides by. **The numeric values are FAC Tool ABI** — they go out in telemetry byte `[19]`, so they must never be renumbered; guard the `USB` (0) and `NONE` (5) cases explicitly instead of doing arithmetic on them.
 - **`fac_imu` / `Libraries/LSM6DS3`**: accel+gyro over I2C1. **Always check `FAC_IMU_GET_status() != HAL_ERROR` before trusting IMU data** — init failure is signalled by 20 LED blinks at boot and is non-fatal.
 - **`jingles/`**: startup melodies played through the motors. The parent repo's `TOOLS/FAC_jingle_composer.html` generates these.
 
@@ -122,7 +122,6 @@ In both cases the touch points are: the ID enum (`FAC_MIXES_ID` / `FAC_SPECIAL_F
 Found during the API documentation pass; they are being fixed one at a time — until then, do not silently "correct" this code as a side effect of another task, and do not assume the surrounding behaviour is intentional. Full descriptions in [README_API.md](docs/README_API.md#11-known-issues). **Numbering is stable**: a fixed issue is removed from this list and moved to [README_API.md § 11.1 Fixed](docs/README_API.md#111-fixed), the others keep their number.
 
 **High**
-2. `fac_battery.c` `FAC_battery_GET_cell_voltage()` returns the **pack** voltage (`battery.voltage`) and never divides by the cell count, yet `fac_app.c` compares it against a per-cell threshold capped at 4000 mV → **low-battery detection is dead on 2S and above**. The cut-off check right below uses the opposite convention (threshold × cell count), which is why cut-off still works.
 3. `LSM6DS3.h` — `int16_t gyro_offsets[]` is a flexible array member inside a struct embedded **by value** in `Gyro`. `LSM6DS3_calculate_offset()` writes 6 bytes past the struct end, landing on `gyro_status` and beyond.
 
 **Medium**
@@ -134,7 +133,6 @@ Found during the API documentation pass; they are being fixed one at a time — 
 7. `fac_servo.c` — `((max-min)/100)*position/10` truncation loses up to ~99 µs of travel; a configured span below 100 µs pins the servo at minimum.
 8. `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are in the enum and mappable (`200+8`…`200+10`) but have no `case` in `FAC_functions_update()` → constant `0.0f`.
 9. `FAC_settings_uint16_to_bytes()` (MSB-first) and `FAC_settings_bytes_to_uint16()` (LSB-first) are not inverses; the latter's comment is wrong. Callers swap bytes manually to compensate.
-10. `BATTERY_TYPE_NONE` (= 5) is used as a cell-count multiplier in the cut-off threshold → unreachable 14000 mV → an unrecognised pack forces CUTOFF.
 11. `FAC_functions_update_inputs()` doesn't zero disabled slots (the mix equivalent does).
 12. `mixes.mix_input_reversed[]` is written in `init()` but never read.
 13. `FAC_mixes_update_mix_outputs()` is declared `()` but defined `(float[])`.

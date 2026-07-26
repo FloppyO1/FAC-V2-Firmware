@@ -124,24 +124,29 @@ void FAC_app_main_loop() {// one cycle every 13ms [about 76Hz] (with simple tank
 		}
 
 		/* LOW BATTERY DETECTOR */		// 200us
-		uint16_t vbat = FAC_battery_GET_cell_voltage();
+		/* both thresholds (low battery and cut off) are per cell values, so they are compared against Vcell */
+		uint16_t vcell = FAC_battery_GET_cell_voltage();
 		uint8_t batteryType = FAC_app_GET_battery_type();
 
 		if (batteryType != BATTERY_TYPE_NONE
 				&& batteryType != BATTERY_TYPE_USB) {// a known battery must be connected at the startup
-			if (vbat
+			if (vcell
 					< FAC_settings_GET_value(
-							FAC_SETTINGS_CODE_LOW_BATTERY_VOLTAGE_MV))// if the vbat is below the low battery thershold
+							FAC_SETTINGS_CODE_LOW_BATTERY_VOLTAGE_MV))// if the cell voltage is below the low battery thershold
 				FAC_app_SET_is_low_battery(TRUE);
 		}
 
 		/* CUT OFF DETECTION */		// 8us
 		static uint32_t timerCutOff = 0;
-		if (vbat
-				> FAC_settings_GET_value(FAC_SETTINGS_CODE_CUTOFF_VOLTAGE_MV)
-						* batteryType) {
-			timerCutOff = HAL_GetTick();// if the vbat is grater than the cutoff threshold the timer will be resetted (battery level is ok)
+		uint16_t cutOffThreshold = FAC_settings_GET_value(
+				FAC_SETTINGS_CODE_CUTOFF_VOLTAGE_MV);
+		if (cutOffThreshold == 0 || batteryType == BATTERY_TYPE_USB) {
+			timerCutOff = HAL_GetTick();// cut off disabled by the user (0mV), or USB powered: there is no pack to protect
+		} else if (batteryType != BATTERY_TYPE_NONE && vcell > cutOffThreshold) {
+			timerCutOff = HAL_GetTick();// if the cell voltage is grater than the cutoff threshold the timer will be resetted (battery level is ok)
 		}
+		/* an unrecognized pack (BATTERY_TYPE_NONE) never resets the timer: its cell count is unknown
+		 * so the cells cannot be protected, the board is sent to CUTOFF on purpose */
 		if (HAL_GetTick() - timerCutOff
 				> FAC_settings_GET_value(
 						FAC_SETTINGS_CODE_CUTOFF_DETECTION_TIME) * 1000) {

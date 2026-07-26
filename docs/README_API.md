@@ -121,7 +121,9 @@ Each iteration: handle a pending USB command (if any), refresh the watchdog, the
 
 **`FAC_STATE_NORMAL`** — the working state. Calls `FAC_mapper_apply_to_devices()` (the whole processing chain), re-checks the arming channel, evaluates low battery and cut-off, and holds the LED solid (or blinks it at 2 Hz when the battery is low).
 
-**`FAC_STATE_CUTOFF`** — same shutdown as DISARMED, plus a faster blink and a distinctive beep. Entered when the pack voltage stays below `CUTOFF_VOLTAGE_MV × cellCount` continuously for `CUTOFF_DETECTION_TIME` seconds. **Latched**: there is no transition out of this state.
+**`FAC_STATE_CUTOFF`** — same shutdown as DISARMED, plus a faster blink and a distinctive beep. Entered when the **cell** voltage stays at or below `CUTOFF_VOLTAGE_MV` continuously for `CUTOFF_DETECTION_TIME` seconds. **Latched**: there is no transition out of this state. Three cases never trigger it: `CUTOFF_VOLTAGE_MV == 0` (user-disabled), USB power (no pack to protect), and — conversely — an unrecognised pack (`BATTERY_TYPE_NONE`) *always* ends in cut-off, deliberately, because its cell count is unknown and the cells cannot be protected.
+
+Both `LOW_BATTERY_VOLTAGE_MV` and `CUTOFF_VOLTAGE_MV` are **per-cell** thresholds and are compared against `FAC_battery_GET_cell_voltage()`.
 
 Timings and thresholds are all `#define`s in `Core/Inc/FAC_Code/config.h`.
 
@@ -526,7 +528,7 @@ uint16_t FAC_adc_get_raw_channel_value(uint8_t chNumber);
 ```c
 void     FAC_battery_init(void);
 uint16_t FAC_battery_GET_voltage(void);
-uint16_t FAC_battery_GET_cell_voltage(void);        // ⚠ returns PACK voltage
+uint16_t FAC_battery_GET_cell_voltage(void);
 uint16_t FAC_battery_GET_type(uint16_t vbat);
 void     FAC_battery_calculate_type(uint16_t vbat);
 void     FAC_battery_SET_calibration_offset(int16_t offset);
@@ -537,7 +539,7 @@ int16_t  FAC_battery_GET_calibration_offset(void);
 |---|---|
 | `FAC_battery_init` | Zeroes the struct and sets the hardware divider ratio (7692 = 7.692:1 ×1000). |
 | `FAC_battery_GET_voltage` | Pack voltage in **millivolts** (8.02 V → 8020), averaged over 5 samples, calibration offset applied. |
-| `FAC_battery_GET_cell_voltage` | ⚠ **Despite the name, returns the pack voltage, not per-cell.** See issue #2. |
+| `FAC_battery_GET_cell_voltage` | Voltage of a **single cell** in millivolts — pack voltage divided by the cell count detected at boot. On USB power (`BATTERY_TYPE_USB`) or on an unrecognised pack (`BATTERY_TYPE_NONE`) there is no valid cell count, so the divider falls back to 1 and the pack voltage is returned. |
 | `FAC_battery_GET_type` | Recomputes and returns the cell count for the given pack voltage. |
 | `FAC_battery_calculate_type` | Classifies `vbat` as USB (≈5.1 V ±tolerance, accounting for the diode drop) or as an *n*-cell pack, using 3.8 V nominal ±425 mV per cell. Unrecognised → `BATTERY_TYPE_NONE`. |
 | `FAC_battery_SET_calibration_offset` / `_GET_` | Signed millivolt correction applied to every reading. |
@@ -698,7 +700,6 @@ Found while documenting the code. Ordered by severity; numbering is kept stable,
 
 | # | Severity | Location | Issue |
 |---|---|---|---|
-| 2 | **High** | `fac_battery.c` `FAC_battery_GET_cell_voltage()` | Returns `battery.voltage` (pack) instead of `single_cell_voltage`, and the calculation never divides by the cell count. Low-battery detection compares this against a per-cell threshold (max 4000 mV), so on 2S and above **low battery can never trigger**. |
 | 3 | **High** | `LSM6DS3.h` / `fac_imu.h` | `int16_t gyro_offsets[]` is a flexible array member, but `LSM6DS3` is embedded **by value** inside `Gyro` with no allocation for it. `LSM6DS3_calculate_offset()` writes 6 bytes past the struct, corrupting `gyro_status` and adjacent statics. |
 | 4 | **Medium** | `fac_settings.c` `FAC_settings_SET_value()` and the USB send helpers | The setting code arrives straight from USB and is never checked against `FAC_SETTINGS_CODE_LAST`, giving an out-of-bounds read/write on `settings[]` from a malformed packet. `FAC_settings_GET_value()` does check — the others should too. |
 | 5 | **Medium** | `fac_motors.c` `FAC_motor_make_noise()` | The `for` loop of `HAL_Delay(0)` before the tone loop consumes roughly the whole `duration` (each `HAL_Delay(0)` waits ~1 tick), so the audible part may be near-zero while the call still blocks for ~2× `duration`. Looks like leftover debug code — worth verifying on hardware. |
@@ -706,7 +707,6 @@ Found while documenting the code. Ordered by severity; numbering is kept stable,
 | 7 | **Low** | `fac_servo.c` `FAC_servo_apply_settings()` | `((max-min)/100) * position / 10` truncates: up to ~99 µs of travel is lost, and if the configured span is under 100 µs the servo is stuck at the minimum. Settings ranges permit a span as small as 2 µs. |
 | 8 | **Low** | `fac_functions.c` | `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are declared in the enum and reachable via the mapper (`200+8` … `200+10`), but have no `case` in `FAC_functions_update()` — they silently output a constant `0.0f`. |
 | 9 | **Low** | `fac_settings.c` | `FAC_settings_uint16_to_bytes()` writes MSB-first while `FAC_settings_bytes_to_uint16()` reads LSB-first, and the latter's comment claims MSB-first. They are not inverses; callers compensate by swapping bytes manually. A trap for future maintainers. |
-| 10 | **Low** | `fac_app.c` cut-off check | `BATTERY_TYPE_NONE` has the value 5 and is used directly as a cell-count multiplier, giving a 14000 mV threshold that can never be reached — so an unrecognised pack (e.g. a deeply discharged 1S at boot) forces CUTOFF after the detection time. Arguably safe, but accidental. |
 | 11 | **Low** | `fac_functions.c` `FAC_functions_update_inputs()` | Does not reset disabled slots to `0.0f`, unlike the equivalent mix function — stale values persist. |
 | 12 | **Low** | `fac_mixes.c` | `mix_input_reversed[]` is populated in `init()` but never read; `FAC_mixes_update_mix_inputs()` re-reads the setting directly. Dead state. |
 | 13 | **Low** | `fac_mixes.h` | `FAC_mixes_update_mix_outputs()` is declared with empty parentheses but defined taking `float[]` — legal C but no type checking at call sites. |
@@ -719,6 +719,8 @@ Found while documenting the code. Ordered by severity; numbering is kept stable,
 | # | Severity | Location | Issue | Fix |
 |---|---|---|---|---|
 | 1 | **High** | `fac_std_receiver.c` `FAC_std_receiver_is_connected()` | The round-robin index reached `0` once every 9 calls, because the `if (channelToCheck == 0) channelToCheck++` guard corrected the *previous* value while the check used the *new* one. `FAC_std_receiver_GET_channel(0)` then read `channels[-1]`, and in PWM mode also called `FAC_pwm_receiver_calculate_channel_value(0)` — which reads `channels_t2[-1]`, i.e. `channels_t1[3]`, and on a passing range check writes `receiver.channels[-1]`, `pwmReceiver.channels_t1[-1]` and zeroes CH4's rising-edge timestamp. Garbage in the adjacent word could make the board report "receiver connected" and arm without an RC link. | The index now cycles with `channelToCheck = (channelToCheck % RECEIVER_CHANNELS_NUMBER) + 1`, which can only produce `1 … RECEIVER_CHANNELS_NUMBER`. `FAC_std_receiver_GET_channel()` additionally returns `0` for any `chNumber` outside that range, before touching any backend. |
+| 2 | **High** | `fac_battery.c` `FAC_battery_GET_cell_voltage()` | Returned `battery.voltage` (pack) instead of `single_cell_voltage`, and `FAC_battery_calculate_cell_voltage()` never divided by the cell count — so `single_cell_voltage` was write-only dead state. Low-battery detection compared the pack voltage against a per-cell threshold (clamped to 2800…4000 mV), so on 2S and above **low battery could never trigger**: a 2S at 3.4 V/cell reads 6800 mV, well above a 3400 mV threshold. | `FAC_battery_calculate_cell_voltage()` now divides the pack voltage by the cell count held in `battery.type`, falling back to a divider of 1 when the type is `BATTERY_TYPE_USB` (value 0 — would be a division by zero) or `BATTERY_TYPE_NONE`. The getter returns `battery.single_cell_voltage`. `fac_app.c` renamed its local to `vcell` and now feeds both the low-battery and the cut-off comparisons with it. |
+| 10 | **Low** | `fac_app.c` cut-off check | `BATTERY_TYPE_NONE` has the value 5 and was used directly as a cell-count multiplier (`CUTOFF_VOLTAGE_MV × batteryType`), giving a 14000 mV threshold that can never be reached — so an unrecognised pack forced CUTOFF after the detection time. Safe, but accidental. | The multiplication is gone: the per-cell threshold is now compared against the per-cell voltage, and the three special cases are explicit — threshold `0` (user-disabled) and `BATTERY_TYPE_USB` always reset the timer, `BATTERY_TYPE_NONE` never does, so an unknown pack still ends in CUTOFF but **on purpose**. The enum values themselves are unchanged (the FAC Tool depends on them). |
 
 ---
 

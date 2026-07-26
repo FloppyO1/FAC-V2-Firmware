@@ -49,11 +49,13 @@ uint16_t FAC_battery_GET_voltage() {
 }
 
 /**
- * @bief 	Return the calculated cell number
+ * @bief 	Return the calculated voltage of a single cell of the pack
+ * @note 	Vcell with the format: 3.812V = 3812mV
+ * @note	On USB power or on an unrecognized pack the cell count is unknown, so the pack voltage is returned
  */
 uint16_t FAC_battery_GET_cell_voltage() {
 	FAC_battery_calculate_cell_voltage();
-	return battery.voltage;
+	return battery.single_cell_voltage;
 }
 
 /**
@@ -105,10 +107,17 @@ static void FAC_battery_calculate_voltage() {
 }
 
 /**
- * @bief 	Calculate the voltage of the battery cell
+ * @bief 	Calculate the voltage of a single cell of the battery pack
+ * @note 	battery.type holds the number of cells detected at the startup (BATTERY_TYPE_1S..4S == 1..4)
+ * @note	USB power (BATTERY_TYPE_USB == 0) and an unrecognized pack (BATTERY_TYPE_NONE) have no valid
+ * 			cell count, so the divider is forced to 1 (a 0 divider would be a division by zero)
  */
 static void FAC_battery_calculate_cell_voltage() {
-	FAC_battery_SET_cell_voltage(FAC_battery_GET_voltage());
+	uint16_t vbat = FAC_battery_GET_voltage();
+	uint8_t cellCount = battery.type;
+	if (cellCount < BATTERY_TYPE_1S || cellCount > BATTERY_TYPE_4S)
+		cellCount = 1;
+	FAC_battery_SET_cell_voltage(vbat / cellCount);
 }
 
 /**
