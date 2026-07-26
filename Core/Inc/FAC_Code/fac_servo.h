@@ -12,7 +12,7 @@
 #include "FAC_Code/config.h"
 
 #define SERVOS_NUMBER 2
-#define MAX_SERVO_VALUE RECEIVER_CHANNEL_RESOLUTION-1
+#define MAX_SERVO_VALUE (RECEIVER_CHANNEL_RESOLUTION-1)	// parentheses needed, it is also used as a divisor
 #define SERVO_RESOLUTION RECEIVER_CHANNEL_RESOLUTION
 
 typedef struct Servo {

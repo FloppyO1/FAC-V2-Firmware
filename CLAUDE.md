@@ -87,7 +87,7 @@ Adding a setting: append to the enum before `FAC_SETTINGS_CODE_LAST`, append the
 
 ### Other modules
 
-- **`fac_servo`**: TIM3 CH3/CH4, prescaler tuned for **1000 ticks per ms**, so `CCR = min_us_value + p` works at any frequency; period is recomputed as `(1000 * SERVO_RESOLUTION) / fs`. Servos are disabled (CCR = 0) unless mapped and armed.
+- **`fac_servo`**: TIM3 CH3/CH4, prescaler tuned for **1000 ticks per ms**, so `CCR = min_us_value + p` works at any frequency; period is recomputed as `(1000 * SERVO_RESOLUTION) / fs`. `p = (span * position) / MAX_SERVO_VALUE` with a **32-bit intermediate** — the widest span (2800 µs) times position 999 overflows 16 bit. Servos are disabled (CCR = 0) unless mapped and armed.
 - **`fac_adc`**: 3 channels DMA-scanned (VBAT, AUX, VREFINT). VDDA is derived from the factory `VREFINT_CAL_ADDR` calibration value, which is what makes battery readings accurate across supply variation.
 - **`fac_battery`**: `voltage_divider_ratio = 7692`; cell count is auto-detected once at boot from Vbat (USB ≈ 5.1 V is detected separately) and stored in `battery.type`. A user-settable `BATTERY_CALIBRATION` offset (stored as signed in a `uint16_t` slot) is added to readings. `enum BATTERY_TYPE` doubles as the cell count for `1S..4S` (values 1–4), which is what `FAC_battery_GET_cell_voltage()` divides by. **The numeric values are FAC Tool ABI** — they go out in telemetry byte `[19]`, so they must never be renumbered; guard the `USB` (0) and `NONE` (5) cases explicitly instead of doing arithmetic on them.
 - **`fac_imu` / `Libraries/LSM6DS3`**: accel+gyro over I2C1. **Always check `FAC_IMU_GET_status() != HAL_ERROR` before trusting IMU data** — init failure is signalled by 20 LED blinks at boot and is non-fatal.
@@ -123,11 +123,7 @@ Found during the API documentation pass; they are being fixed one at a time — 
 
 The list is a set of *suspicions*, not verified defects — issue #5 turned out to be a misreading of working code, and "fixing" it would have broken the jingles. Confirm the mechanism (and ask the user, who has the hardware) before changing anything.
 
-**Medium**
-6. `fac_jingles.c` calls `FAC_motor_make_noise()` with no `#include "FAC_Code/fac_motors.h"` — compiles only via implicit declaration.
-
 **Low / informational**
-7. `fac_servo.c` — `((max-min)/100)*position/10` truncation loses up to ~99 µs of travel; a configured span below 100 µs pins the servo at minimum.
 8. `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are in the enum and mappable (`200+8`…`200+10`) but have no `case` in `FAC_functions_update()` → constant `0.0f`.
 9. `FAC_settings_uint16_to_bytes()` (MSB-first) and `FAC_settings_bytes_to_uint16()` (LSB-first) are not inverses; the latter's comment is wrong. Callers swap bytes manually to compensate.
 11. `FAC_functions_update_inputs()` doesn't zero disabled slots (the mix equivalent does).

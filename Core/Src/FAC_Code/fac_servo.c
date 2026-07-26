@@ -84,12 +84,16 @@ static void FAC_servo_apply_new_freq() {
 /**
  * @brief 	Update servo values
  * @note	Position already been reversed on position setter
+ * @note	The settings table guarantees max_ms_value > min_ms_value (min is capped at 1499us,
+ * 			max starts at 1501us), so the span can never underflow
  */
 static void FAC_servo_apply_settings(uint8_t servoNumber) {
 	/* set new position (new duty) if enabled, else disable pwm*/
 	if (FAC_servo_GET_is_enable(servoNumber)) {
 		// calculate the factored position based on the max and min values
-		uint16_t p = (((servos[servoNumber - 1]->max_ms_value - servos[servoNumber - 1]->min_ms_value) / 100) * servos[servoNumber - 1]->position) / 10;
+		uint16_t span = servos[servoNumber - 1]->max_ms_value - servos[servoNumber - 1]->min_ms_value;
+		// 32 bit intermediate: the widest span (2800us) times the max position (999) does not fit in 16 bit
+		uint16_t p = (uint16_t) (((uint32_t) span * servos[servoNumber - 1]->position) / MAX_SERVO_VALUE);
 		switch (servoNumber) {
 			case 1:
 				// using 1000 ticks per ms the formula is the same for every frequency chosen
