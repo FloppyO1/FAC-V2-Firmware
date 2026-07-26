@@ -67,7 +67,7 @@ RC receiver ──EXTI+TIM2──> fac_pwm_receiver / fac_ppm_receiver
 
 ### Settings + EEPROM + USB protocol
 
-`fac_settings.c` is the configuration hub. `enum FAC_SETTINGS_CODE` (in `fac_settings.h`) and the `settings[]` table (in `fac_settings.c`) are **positionally coupled** — the table is indexed by the enum value and must list rows in exactly the same order, each with `{code, default, min, max}`. `FAC_settings_SET_value()` clamps to `[min, max]`, so the table *is* the validation layer.
+`fac_settings.c` is the configuration hub. `enum FAC_SETTINGS_CODE` (in `fac_settings.h`) and the `settings[]` table (in `fac_settings.c`) are **positionally coupled** — the table is indexed by the enum value and must list rows in exactly the same order, each with `{code, default, min, max}`. `FAC_settings_SET_value()` rejects codes `>= FAC_SETTINGS_CODE_LAST` and clamps accepted values to `[min, max]`, so the table *is* the validation layer. The same bounds check guards `FAC_settings_GET_value()` and the two `FAC_settings_USB_SEND_setting_*()` helpers — the code byte arrives unvalidated from USB, so **any new function indexing `settings[]` must check it too**.
 
 Adding a setting: append to the enum before `FAC_SETTINGS_CODE_LAST`, append the matching row, and consume it wherever needed (usually in a module's `init()`, since `FAC_app_init_all_modules()` re-runs all module inits when the tool sends *apply*). The FAC Tool addresses settings by these numeric codes, so **inserting in the middle breaks tool compatibility and shifts every EEPROM slot**.
 
@@ -122,7 +122,6 @@ In both cases the touch points are: the ID enum (`FAC_MIXES_ID` / `FAC_SPECIAL_F
 Found during the API documentation pass; they are being fixed one at a time — until then, do not silently "correct" this code as a side effect of another task, and do not assume the surrounding behaviour is intentional. Full descriptions in [README_API.md](docs/README_API.md#11-known-issues). **Numbering is stable**: a fixed issue is removed from this list and moved to [README_API.md § 11.1 Fixed](docs/README_API.md#111-fixed), the others keep their number.
 
 **Medium**
-4. `fac_settings.c` — the setting code comes straight from USB and is never bounds-checked in `FAC_settings_SET_value()` / `FAC_settings_USB_SEND_setting_value()` / `_ranges()`; only `FAC_settings_GET_value()` checks.
 5. `fac_motors.c` `FAC_motor_make_noise()` — the `HAL_Delay(0)` loop before the tone loop burns ≈ the whole `duration` (each call waits ~1 tick), so the audible portion may be near zero while the call blocks ~2× as long. Verify on hardware before changing.
 6. `fac_jingles.c` calls `FAC_motor_make_noise()` with no `#include "FAC_Code/fac_motors.h"` — compiles only via implicit declaration.
 

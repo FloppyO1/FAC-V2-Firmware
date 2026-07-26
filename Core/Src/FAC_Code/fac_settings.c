@@ -121,7 +121,14 @@ static void FAC_settings_SET_value(uint8_t code, uint16_t value);
 
 /* FUNCTION DEFINITION */
 /* ----------------------PRIVATE FUNCTIONS---------------------- */
+/*
+ * @brief	Store a value into the settings array, clamped to the range of that setting
+ * @note	The code can come from the usb command, where it is not validated, so it is checked here
+ */
 static void FAC_settings_SET_value(uint8_t code, uint16_t value) {
+	if (code >= FAC_SETTINGS_CODE_LAST)
+		return;	// unknown setting code: ignore it instead of writing outside the settings array
+
 	uint16_t v = value;
 	/* check if value is inside the range */
 	if (v < settings[code].min_value)
@@ -384,8 +391,12 @@ uint8_t FAC_settings_command_response() {
 /**
  * @brief	Sends via COM serial the settings value
  * @note	Data format [code, valueLSB, valueMSB]
+ * @note	An unknown code gets no answer at all, the code is not validated by the usb protocol
  */
 void FAC_settings_USB_SEND_setting_value(uint8_t code) {
+	if (code >= FAC_SETTINGS_CODE_LAST)
+		return;	// unknown setting code: do not read outside the settings array
+
 	uint8_t data[4];
 	data[0] = FAC_USB_COMMAND_READ_VALUE;
 	data[1] = code;
@@ -399,8 +410,12 @@ void FAC_settings_USB_SEND_setting_value(uint8_t code) {
 /**
  * @brief	Sends via COM serial the settings value ranges
  * @note	Data format [code, minLSB, minMSB, maxLSB, maxMSB]
+ * @note	An unknown code gets no answer at all, the code is not validated by the usb protocol
  */
 void FAC_settings_USB_SEND_setting_ranges(uint8_t code) {
+	if (code >= FAC_SETTINGS_CODE_LAST)
+		return;	// unknown setting code: do not read outside the settings array
+
 	uint8_t data[6];
 	data[0] = FAC_USB_COMMAND_READ_RANGE;
 	data[1] = code;

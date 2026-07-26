@@ -238,7 +238,7 @@ typedef struct Setting {
 } Setting;
 ```
 
-There are currently **64 settings**. The enum and the table are **positionally coupled** — the table is indexed by the enum value, so the rows must appear in exactly the same order as the enum entries. `FAC_settings_SET_value()` clamps every write to `[min, max]`, which makes the table the single validation layer for the whole firmware.
+There are currently **64 settings**. The enum and the table are **positionally coupled** — the table is indexed by the enum value, so the rows must appear in exactly the same order as the enum entries. `FAC_settings_SET_value()` rejects any `code >= FAC_SETTINGS_CODE_LAST` and clamps every accepted write to `[min, max]`, which makes the table the single validation layer for the whole firmware.
 
 Groups: motors (7) · servos (7) · battery (3) · receiver (3) · mixes (17) · special functions (20) · mapper (5) · firmware version (1) · battery calibration (1).
 
@@ -311,8 +311,8 @@ extern uint8_t newComSerialReceived;   // set by CDC_Receive_FS, cleared by the 
 void     FAC_settings_init(uint8_t bootValue);
 uint8_t  FAC_settings_command_response(void);
 uint16_t FAC_settings_GET_value(uint8_t code);
-void     FAC_settings_USB_SEND_setting_value (uint8_t code);   // ⚠
-void     FAC_settings_USB_SEND_setting_ranges(uint8_t code);   // ⚠
+void     FAC_settings_USB_SEND_setting_value (uint8_t code);
+void     FAC_settings_USB_SEND_setting_ranges(uint8_t code);
 void     FAC_settings_SEND_what_received(void);
 void     FAC_settings_SET_calibration_offset(uint16_t value);
 ```
@@ -322,8 +322,8 @@ void     FAC_settings_SET_calibration_offset(uint16_t value);
 | `FAC_settings_init` | Loads settings from EEPROM, or writes the defaults if `bootValue` does not match the marker byte. Pass `FIRMWARE_VERSION_TAG`. Blocking (EEPROM I/O + blink feedback). |
 | `FAC_settings_command_response` | Decodes and executes the command currently in `comSerialBuffer`. Returns `TRUE` if the command code was recognised. Call from the main loop when `newComSerialReceived` is set. |
 | `FAC_settings_GET_value` | Value of setting `code`. Returns `0` for an out-of-range code (bounds-checked). |
-| `FAC_settings_USB_SEND_setting_value` | Transmits `[READ_VALUE, code, valueMSB, valueLSB]`. ⚠ `code` is **not** bounds-checked. |
-| `FAC_settings_USB_SEND_setting_ranges` | Transmits `[READ_RANGE, code, minMSB, minLSB, maxMSB, maxLSB]`. ⚠ `code` is **not** bounds-checked. |
+| `FAC_settings_USB_SEND_setting_value` | Transmits `[READ_VALUE, code, valueMSB, valueLSB]`. A `code >= FAC_SETTINGS_CODE_LAST` is ignored and gets **no reply at all**. |
+| `FAC_settings_USB_SEND_setting_ranges` | Transmits `[READ_RANGE, code, minMSB, minLSB, maxMSB, maxLSB]`. Same out-of-range handling: no reply. |
 | `FAC_settings_SEND_what_received` | Echoes the whole 64-byte receive buffer. Debug aid; currently unused. |
 | `FAC_settings_SET_calibration_offset` | Writes the battery calibration offset into the settings table, clamped. Must be called *before* the first EEPROM init to take effect. Currently unused. |
 
@@ -702,7 +702,6 @@ Found while documenting the code. Ordered by severity; numbering is kept stable,
 
 | # | Severity | Location | Issue |
 |---|---|---|---|
-| 4 | **Medium** | `fac_settings.c` `FAC_settings_SET_value()` and the USB send helpers | The setting code arrives straight from USB and is never checked against `FAC_SETTINGS_CODE_LAST`, giving an out-of-bounds read/write on `settings[]` from a malformed packet. `FAC_settings_GET_value()` does check — the others should too. |
 | 5 | **Medium** | `fac_motors.c` `FAC_motor_make_noise()` | The `for` loop of `HAL_Delay(0)` before the tone loop consumes roughly the whole `duration` (each `HAL_Delay(0)` waits ~1 tick), so the audible part may be near-zero while the call still blocks for ~2× `duration`. Looks like leftover debug code — worth verifying on hardware. |
 | 6 | **Medium** | `fac_jingles.c` | Calls `FAC_motor_make_noise()` without including `FAC_Code/fac_motors.h`; it compiles only via implicit declaration (a `-Wall` warning). |
 | 7 | **Low** | `fac_servo.c` `FAC_servo_apply_settings()` | `((max-min)/100) * position / 10` truncates: up to ~99 µs of travel is lost, and if the configured span is under 100 µs the servo is stuck at the minimum. Settings ranges permit a span as small as 2 µs. |
@@ -722,6 +721,7 @@ Found while documenting the code. Ordered by severity; numbering is kept stable,
 | 1 | **High** | `fac_std_receiver.c` `FAC_std_receiver_is_connected()` | The round-robin index reached `0` once every 9 calls, because the `if (channelToCheck == 0) channelToCheck++` guard corrected the *previous* value while the check used the *new* one. `FAC_std_receiver_GET_channel(0)` then read `channels[-1]`, and in PWM mode also called `FAC_pwm_receiver_calculate_channel_value(0)` — which reads `channels_t2[-1]`, i.e. `channels_t1[3]`, and on a passing range check writes `receiver.channels[-1]`, `pwmReceiver.channels_t1[-1]` and zeroes CH4's rising-edge timestamp. Garbage in the adjacent word could make the board report "receiver connected" and arm without an RC link. | The index now cycles with `channelToCheck = (channelToCheck % RECEIVER_CHANNELS_NUMBER) + 1`, which can only produce `1 … RECEIVER_CHANNELS_NUMBER`. `FAC_std_receiver_GET_channel()` additionally returns `0` for any `chNumber` outside that range, before touching any backend. |
 | 2 | **High** | `fac_battery.c` `FAC_battery_GET_cell_voltage()` | Returned `battery.voltage` (pack) instead of `single_cell_voltage`, and `FAC_battery_calculate_cell_voltage()` never divided by the cell count — so `single_cell_voltage` was write-only dead state. Low-battery detection compared the pack voltage against a per-cell threshold (clamped to 2800…4000 mV), so on 2S and above **low battery could never trigger**: a 2S at 3.4 V/cell reads 6800 mV, well above a 3400 mV threshold. | `FAC_battery_calculate_cell_voltage()` now divides the pack voltage by the cell count held in `battery.type`, falling back to a divider of 1 when the type is `BATTERY_TYPE_USB` (value 0 — would be a division by zero) or `BATTERY_TYPE_NONE`. The getter returns `battery.single_cell_voltage`. `fac_app.c` renamed its local to `vcell` and now feeds both the low-battery and the cut-off comparisons with it. |
 | 3 | **High** | `LSM6DS3.h` / `fac_imu.h` | `int16_t gyro_offsets[]` was a flexible array member, so it contributed 0 to `sizeof(LSM6DS3)` (28 bytes) and had no storage — yet `LSM6DS3` is embedded **by value** inside `Gyro`. Verified against the committed build: `gyro` sat at `0x200003e0` with `sizeof(Gyro) == 0x20`, `gyro_status` at offset 28, and `.bss.motors` immediately after at `0x20000400`. `LSM6DS3_calculate_offset()` stored `[0]`→bytes 28-29 (**over `gyro_status`**), `[1]`→30-31 (padding), `[2]`→32-33 (**past `gyro`, onto the low half-word of `motors[0]`, the Motor 1 pointer**). Latent only by luck of init ordering: `FAC_IMU_GET_status()` is read before the calibration and `FAC_motor_init()` reassigns `motors[0]` right after it. Also a C99/C11 constraint violation (§6.7.2.1p3) that GCC accepts silently. | The array is now sized: `int16_t gyro_offsets[LSM6DS3_AXIS_NUMBER]`, with the new `LSM6DS3_AXIS_NUMBER` (3) also replacing the hardcoded `3` in the three axis loops. `sizeof(LSM6DS3)` 28 → 36, `sizeof(Gyro)` 32 → 40; 8 bytes of RAM, no signature or protocol change. |
+| 4 | **Medium** | `fac_settings.c` `FAC_settings_SET_value()` and the USB send helpers | The setting code arrives straight from USB (`comSerialBuffer[1]`, so `0…255`) and was never checked against `FAC_SETTINGS_CODE_LAST` (64), giving an out-of-bounds read/write on `settings[]` from a single malformed 4-byte packet. `Setting` is 8 bytes and the committed build placed `.data.settings` at `0x20000000`, the very first object in RAM, so `settings[code].value` reached `SystemCoreClock` at code 64, `uwTickPrio` at 65, and the USB CDC configuration descriptors from 66 on — and the value stored was arbitrary anyway, since the clamp read a garbage `min`/`max`. `FAC_settings_GET_value()` already checked. | The same guard added to all three: `if (code >= FAC_SETTINGS_CODE_LAST) return;`. An unknown code is now ignored on write and gets no reply on the two read commands. The `WRITE` ack byte is unchanged — `command_response()` still sends it — since a NACK convention would be a FAC Tool protocol change. |
 | 10 | **Low** | `fac_app.c` cut-off check | `BATTERY_TYPE_NONE` has the value 5 and was used directly as a cell-count multiplier (`CUTOFF_VOLTAGE_MV × batteryType`), giving a 14000 mV threshold that can never be reached — so an unrecognised pack forced CUTOFF after the detection time. Safe, but accidental. | The multiplication is gone: the per-cell threshold is now compared against the per-cell voltage, and the three special cases are explicit — threshold `0` (user-disabled) and `BATTERY_TYPE_USB` always reset the timer, `BATTERY_TYPE_NONE` never does, so an unknown pack still ends in CUTOFF but **on purpose**. The enum values themselves are unchanged (the FAC Tool depends on them). |
 
 ---
