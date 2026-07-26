@@ -91,19 +91,20 @@ static void FAC_servo_apply_settings(uint8_t servoNumber) {
 	/* set new position (new duty) if enabled, else disable pwm*/
 	if (FAC_servo_GET_is_enable(servoNumber)) {
 		// calculate the factored position based on the max and min values
-		uint16_t span = servos[servoNumber - 1]->max_ms_value - servos[servoNumber - 1]->min_ms_value;
+		uint16_t minValue = FAC_servo_GET_min_ms_value(servoNumber);
+		uint16_t span = FAC_servo_GET_max_ms_value(servoNumber) - minValue;
 		// 32 bit intermediate: the widest span (2800us) times the max position (999) does not fit in 16 bit
-		uint16_t p = (uint16_t) (((uint32_t) span * servos[servoNumber - 1]->position) / MAX_SERVO_VALUE);
+		uint16_t p = (uint16_t) (((uint32_t) span * FAC_servo_GET_position(servoNumber)) / MAX_SERVO_VALUE);
 		switch (servoNumber) {
 			case 1:
 				// using 1000 ticks per ms the formula is the same for every frequency chosen
 //				TIM3->CCR3 = 1000 + servos[servoNumber]->position;	// old method, only 1-2ms
-				TIM3->CCR3 = servos[servoNumber-1]->min_ms_value + p;
+				TIM3->CCR3 = minValue + p;
 				break;
 			case 2:
 				// using 1000 ticks per ms the formula is the same for every frequency chosen
 //				TIM3->CCR4 = 1000 + servos[servoNumber]->position;	// old method, only 1-2ms
-				TIM3->CCR4 = servos[servoNumber-1]->min_ms_value + p;
+				TIM3->CCR4 = minValue + p;
 				break;
 		}
 	} else {

@@ -165,17 +165,13 @@ uint16_t FAC_std_receiver_GET_channel(uint8_t chNumber) {
 /**
  * @brief 		Allows the different types of receiver to set the new value of a specific channel
  * @visibility	Everywhere
- * @retval		Return 0 if the new value was inside the range, 1 if it was outside the range so it is resized to max value allowed
+ * @note		The deadzone is applied here, then the value is clamped and stored
  */
-uint8_t FAC_std_receiver_new_channel_value(uint8_t chNumber, uint16_t value) {
+void FAC_std_receiver_new_channel_value(uint8_t chNumber, uint16_t value) {
 	uint16_t valueWithDeadzone = FAC_std_receiver_calculate_dead_zone(value,
 			FAC_settings_GET_value(
 					FAC_SETTINGS_CODE_CHANNELS_DEADZONE_PERCENTAGE), chNumber);
-	uint16_t valueStored = FAC_std_receiver_SET_channel(chNumber,
-			valueWithDeadzone);
-	if (value != valueStored)
-		return 1;// the value stored was not in the range (value stored do not correspond to "value")
-	return 0;
+	FAC_std_receiver_SET_channel(chNumber, valueWithDeadzone);
 }
 
 /**

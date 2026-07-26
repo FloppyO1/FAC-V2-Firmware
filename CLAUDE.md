@@ -19,7 +19,7 @@ STM32CubeIDE (Eclipse CDT) project — `.project`, `.cproject`, `FAC_Firmware_V2
 - **Normal workflow is the IDE**: build with STM32CubeIDE, flash/debug over ST-LINK using `FAC_Firmware_V2 Debug.launch`.
 - **CLI build**: `make -C Debug all` (needs `arm-none-eabi-gcc` from *GNU Tools for STM32 13.3.rel1* and `make` on PATH — neither is on PATH in this environment by default).
 - `Debug/makefile` and `Debug/**/subdir.mk` are **auto-generated and contain absolute paths** (`D:\GITHUB\Floppy-Ant-Controller\...`). Never hand-edit them; adding a new `.c` file requires regenerating them from the IDE (refresh/rebuild the project), otherwise the file silently isn't compiled.
-- Compile flags: `-mcpu=cortex-m0 -std=gnu11 -O3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32F072xB --specs=nano.specs`. Linker script `STM32F072CBTX_FLASH.ld`.
+- Compile flags: `-mcpu=cortex-m0 -mthumb -mfloat-abi=soft -std=gnu11 -O3 -g3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32F072xB -ffunction-sections -fdata-sections **-Wall** -fstack-usage -fcyclomatic-complexity --specs=nano.specs`. Linker script `STM32F072CBTX_FLASH.ld`. **`-Wall` is on**, so an unused `static` function or variable is a real warning in the build log — treat those as defects to clean up, not noise.
 - **`Debug/` and `Release/` are git-ignored** (see `.gitignore`) — build artifacts and the generated makefiles are not versioned, so a fresh clone has to be built from the IDE once before `make -C Debug all` works. They were tracked up to and including commit `ac46e5f`, so `.o`/`.elf`/`.map` from older revisions are still reachable in history.
 - There are **no unit tests** and no host-side test harness. Verification is on hardware (or via the FAC Tool with `IM_TESTING_FAC_TOOL`, see below).
 
@@ -54,7 +54,7 @@ RC receiver ──EXTI+TIM2──> fac_pwm_receiver / fac_ppm_receiver
 - **`fac_std_receiver`** is the single abstraction all consumers use (`FAC_std_receiver_GET_channel(n)`, **1-based**). It lazily recalculates the channel from whichever receiver backend is active, applies the deadzone (center + extremes; channel 3 gets extremes only since throttle has no return spring), and clamps to `[0, RECEIVER_CHANNEL_RESOLUTION-1]`. Adding a receiver type = new `RECEIVER_TYPE_*` enum entry + `switch` cases in `FAC_std_reciever_init`, `FAC_std_receiver_GET_channel`, and `HAL_GPIO_EXTI_Callback`.
 - **Timing capture**: TIM2 is a free-running 32-bit counter at **0.5 µs/tick** (prescaler 24-1 on 48 MHz). `MAX_TIM2_TEORETICAL_CHANNEL_COUNT 4000` = 2 ms. PWM mode uses 4 EXTI pins (CH1–CH4); PPM mode uses CH1 only, 8 channels.
 - **Mixes vs. special functions**: a *mix* has up to 8 inputs / 10 outputs and only **one is active at a time** (`FAC_SETTINGS_CODE_ACTIVE_MIX`). A *special function* has exactly 1 input / 1 output, and up to 20 can run simultaneously; a function slot is disabled when its input channel setting is 0. Both write normalized `[-1.0f, +1.0f]`.
-- **Mapper link encoding** (this is the crux of the configurability): each device setting (`FAC_SETTINGS_CODE_MAPPER_M1..S2`) stores `0` = unused, `100+i` = output *i* of the active mix, `200+i` = output of special function *i* (index into `FAC_SPECIAL_FUNCTIONS_ID`). `FAC_mapper_apply_to_devices()` runs each loop, updates only the mixes/functions actually referenced, then converts: motors get sign→direction + magnitude→speed; servos get `map_float(-1..1 → 0..SERVO_POSITION_RESOLUTION)`.
+- **Mapper link encoding** (this is the crux of the configurability): each device setting (`FAC_SETTINGS_CODE_MAPPER_M1..S2`) stores `0` = unused, `100+i` = output *i* of the active mix, `200+i` = output of special function *i* (index into `FAC_SPECIAL_FUNCTIONS_ID`). `FAC_mapper_apply_to_devices()` runs each loop, updates only the mixes/functions actually referenced, then converts: motors get sign→direction + magnitude→speed; servos get `map_float(-1..1 → 0..SERVO_POSITION_RESOLUTION)`. **Only `100..109` and `200..210` are meaningful**, but the setting's `{min, max}` is a single `0..210` interval that cannot express the gap, so `110..199` is accepted by the validation layer — `FAC_mixes_GET_output()` / `FAC_functions_GET_output()` therefore bounds-check the index themselves and return `0.0f`. Keep that guard if you touch them.
 - **Unmapped devices are forced safe**: motors to speed 0, servos PWM disabled.
 
 ### State machine (`FAC_app_main_loop`)
@@ -73,7 +73,7 @@ Adding a setting: append to the enum before `FAC_SETTINGS_CODE_LAST`, append the
 
 - **EEPROM** (I2C1, `fac_eeprom.c`): each setting is a `uint16_t` at byte address `code * 2`; ~125 settings fit in the 2 kbit part. Writes are skipped when the value is unchanged (wear reduction) and each byte write costs a 10 ms blocking delay.
 - **Factory-reset mechanism**: `FAC_settings_init(FIRMWARE_VERSION_TAG)` compares a boot marker byte in EEPROM with `FIRMWARE_VERSION_TAG` (a hash of MAJOR/MINOR/PATCH from `config.h`). **Bumping the firmware version in `config.h` therefore wipes user settings back to defaults on the next boot** — intended when the settings layout changes, but be aware it happens for any version bump. Boot blink count tells them apart: 10 fast blinks = defaults written, 3 blinks = normal load.
-- **USB CDC protocol** (`FAC_USB_COMMAND_CODE`): host sends `[command, settingCode, valueMSB, valueLSB]`. Multi-byte values on the wire are **big-endian** while the MCU is little-endian — conversions are explicit in `FAC_settings_uint16_to_bytes` / `_bytes_to_uint16`, and note `FAC_USB_COMMAND_WRITE` reads `comSerialBuffer[3], [2]` in that order. Most commands ack with a single byte `73`.
+- **USB CDC protocol** (`FAC_USB_COMMAND_CODE`): host sends `[command, settingCode, valueMSB, valueLSB]`. Multi-byte values on the wire are **big-endian** while the MCU is little-endian — conversions are explicit in `FAC_settings_uint16_to_bytes` / `_bytes_to_uint16`, which are exact inverses (both MSB-first), so callers pass the wire bytes straight through without swapping. Most commands ack with a single byte `73`.
 - Telemetry response is a **27-byte packet**: `[0]` code, `[1..16]` 8 channels, `[17..18]` Vbat mV, `[19]` battery type, `[20]` FAC state, `[21..26]` accel X/Y/Z in mg. The layout is documented above `FAC_settings_USB_SEND_telemetry()` — keep that comment in sync with the FAC Tool.
 - `CDC_Receive_FS` (ISR context) only copies into `comSerialBuffer` and sets `newComSerialReceived`; the actual command handling runs from the main loop. Keep it that way — command handlers do blocking I2C/EEPROM work.
 
@@ -106,6 +106,8 @@ Both have a **9-step numbered recipe in the file header comments** — follow th
 
 In both cases the touch points are: the ID enum (`FAC_MIXES_ID` / `FAC_SPECIAL_FUNCTIONS_ID`), a `case` in the dispatcher (`FAC_mix_update()` / `FAC_functions_update()`), the `#include` in `fac_mixes.c` / `fac_functions.c`, and — for mixes — the `max` of `FAC_SETTINGS_CODE_ACTIVE_MIX` follows `FAC_MIX_LAST-1` automatically. The `/* INSERT YOUR CODE HERE */` region is the only part of the generated body to modify; the boilerplate around it (input fetch, output clamping, write-back) must stay.
 
+Step 3's `mix_id` / `first_special_function_id` is a **documentation marker only** — it records which enum ID the file implements, and step 5's `case` label uses the enum name directly (a `static const` from another translation unit is neither visible nor a valid `case` label). It is therefore deliberately never read, and carries `__attribute__((unused))` so `-Wall` stays quiet; keep the attribute when copying the template.
+
 `*.old` files are the superseded pre-refactor mix implementations, kept for reference; the dead code at the bottom of `fac_mixes.c` is likewise historical.
 
 ## Conventions
@@ -117,23 +119,19 @@ In both cases the touch points are: the ID enum (`FAC_MIXES_ID` / `FAC_SPECIAL_F
 - Comments and identifiers contain non-native-English spellings (`PROTORYPES`, `PUBBLIC`, `outouts`, `SPECIAL_FUNCITONS_NUMBER`, `FAC_std_reciever_init`). Match the existing spelling when referencing them; don't "fix" them casually — several are part of the public API surface.
 - Tabs for indentation, K&R braces, doc blocks use `@brief`/`@note`/`@retval`/`@IMPORTANT`.
 
-## Known issues (unfixed)
+## Known issues
 
-Found during the API documentation pass; they are being fixed one at a time — until then, do not silently "correct" this code as a side effect of another task, and do not assume the surrounding behaviour is intentional. Full descriptions in [README_API.md](docs/README_API.md#11-known-issues). **Numbering is stable**: a closed issue is removed from this list and moved to [README_API.md § 11.1 Fixed](docs/README_API.md#111-fixed) or [§ 11.2 Withdrawn](docs/README_API.md#112-withdrawn-not-bugs), the others keep their number.
+The list found during the API documentation pass is now **closed**: #1–#4, #6, #7 and #9–#17 are fixed, #5 was withdrawn as a misdiagnosis. Full descriptions, with the mechanism and the fix applied to each, in [README_API.md § 11](docs/README_API.md#11-known-issues). **Numbering is stable** — a closed issue keeps its number and moves to [§ 11.1 Fixed](docs/README_API.md#111-fixed) or [§ 11.2 Withdrawn](docs/README_API.md#112-withdrawn-not-bugs); never renumber the others.
 
-The list is a set of *suspicions*, not verified defects — issue #5 turned out to be a misreading of working code, and "fixing" it would have broken the jingles. Confirm the mechanism (and ask the user, who has the hardware) before changing anything.
+Lesson worth keeping: that list was a set of *suspicions*, not verified defects. Issue #5 turned out to be a misreading of working code and "fixing" it would have broken the jingles, while #17 — the only one with a real safety consequence left — was found by reading the code around #8, not from the list. Confirm the mechanism, and ask the user (who has the hardware) before changing behaviour.
 
-**Low / informational**
-8. `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are in the enum and mappable (`200+8`…`200+10`) but have no `case` in `FAC_functions_update()` → constant `0.0f`.
-9. `FAC_settings_uint16_to_bytes()` (MSB-first) and `FAC_settings_bytes_to_uint16()` (LSB-first) are not inverses; the latter's comment is wrong. Callers swap bytes manually to compensate.
-11. `FAC_functions_update_inputs()` doesn't zero disabled slots (the mix equivalent does).
-12. `mixes.mix_input_reversed[]` is written in `init()` but never read.
-13. `FAC_mixes_update_mix_outputs()` is declared `()` but defined `(float[])`.
-14. `FAC_std_receiver_new_channel_value()` compares pre- vs post-deadzone values, so its return code is meaningless; all callers ignore it.
-15. `FAC_motor_GET_*` and `FAC_servo_GET_servo_freq()` are non-static but missing from their headers.
-16. `fac_battery.h` declares two functions twice; `FAC_battery_GET_type()` returns `uint16_t` for a `uint8_t` value.
+**Not a defect — unimplemented feature**
+8. `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are in the enum and mappable (`200+8`…`200+10`) but have no `case` in `FAC_functions_update()`, so they output a constant `0.0f`. The function itself was never written — this is a feature to implement, not a bug to fix.
 
 Verified as *not* problems: the `settings[]` table and `enum FAC_SETTINGS_CODE` match exactly (64 entries, same order).
+
+Still open, found later and **not** yet addressed:
+- `fac_mapper.c` `FAC_mapper_apply_to_devices()` iterates with `for (int i = 0; i < sizeof(links); i++)` over `uint8_t links[5]`. Correct only because the element size is 1 — widening the array's type would silently overrun it.
 
 ## Debug switches (`Core/Inc/FAC_Code/config.h`, `DEBUG` builds only)
 

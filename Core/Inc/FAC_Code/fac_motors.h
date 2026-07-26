@@ -28,6 +28,10 @@ typedef struct Motor {
 
 
 /* FUNCTIONs */
+uint8_t FAC_motor_GET_direction(uint8_t motorNumber);
+uint16_t FAC_motor_GET_speed(uint8_t motorNumber);
+uint8_t FAC_motor_GET_reverse(uint8_t motorNumber);
+uint8_t FAC_motor_GET_brake_en(uint8_t motorNumber);
 void FAC_motor_set_brake_status(uint8_t motorNumber, uint8_t state);
 void FAC_motor_enable_brake(uint8_t motorNumber);
 void FAC_motor_disable_brake(uint8_t motorNumber);

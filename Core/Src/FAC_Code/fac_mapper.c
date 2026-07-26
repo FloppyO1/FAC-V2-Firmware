@@ -35,6 +35,8 @@
 /*
  * @brief	According to the output value of the linked output apply the DC motor speed and direction
  * @note	Link value is the settings value of the mapper not the actual output value
+ * @note	Only 100..109 and 200..210 are meaningful, but the settings range is a single 0..210
+ * 			interval and cannot exclude the gap, so an invalid link resolves to 0.0f in the getters
  */
 static void FAC_mapper_apply_to_DCmotor(uint8_t motorNumber, uint8_t linkValue) {
 	float outputLinkedValue = 0.0f;
@@ -62,6 +64,8 @@ static void FAC_mapper_apply_to_DCmotor(uint8_t motorNumber, uint8_t linkValue) 
 /*
  * @brief	According to the output value of the linked output apply the servo
  * @note	Link value is the settings value of the mapper not the actual output value
+ * @note	Only 100..109 and 200..210 are meaningful, but the settings range is a single 0..210
+ * 			interval and cannot exclude the gap, so an invalid link resolves to 0.0f in the getters
  */
 static void FAC_mapper_apply_to_servo(uint8_t servoNumber, uint8_t linkValue) {
 	float outputLinkedValue = 0.0f;
@@ -119,9 +123,11 @@ void FAC_mapper_apply_to_devices() {
 
 		if (links[i] / 100 == 2) {	// 200+0 is function at position 0 (see FAC_SPECIAL_FUNCTIONS_ID for number reference)
 			uint8_t linkedFunctionNumber = links[i]%200;
-			if(!functionsUpdated[linkedFunctionNumber])
-			FAC_functions_update(linkedFunctionNumber);
-			functionsUpdated[linkedFunctionNumber] = TRUE;
+			if (linkedFunctionNumber < SPECIAL_FUNCITONS_NUMBER) {	// the settings range cannot exclude the invalid link values, so check here
+				if(!functionsUpdated[linkedFunctionNumber])
+				FAC_functions_update(linkedFunctionNumber);
+				functionsUpdated[linkedFunctionNumber] = TRUE;
+			}
 		}
 	}
 

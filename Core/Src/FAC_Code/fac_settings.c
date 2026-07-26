@@ -182,11 +182,11 @@ static void FAC_settings_uint16_to_bytes(uint16_t value, uint8_t *array) {
 /**
  * @brief		Convert a uint8 array into the corrisponding uint16_t
  * @retval		Uint16_t converted form the byte array
- * @note		MSB first (big endian)
+ * @note		MSB first (big endian), so it is the exact inverse of FAC_settings_uint16_to_bytes
  * @ATTENCTION	arm use little endian
  */
 static uint16_t FAC_settings_bytes_to_uint16(const uint8_t *array) {
-	return (uint16_t) array[0] | ((uint16_t) array[1] << 8);
+	return ((uint16_t) array[0] << 8) | (uint16_t) array[1];
 }
 
 /*
@@ -348,9 +348,8 @@ uint8_t FAC_settings_command_response() {
 		commandUndestood = TRUE;
 		break;
 	case FAC_USB_COMMAND_WRITE:
-		uint8_t valueRaw[2] = {	// first 3 than 2 because data is sent in big endian (first msB than lsB) arm use little endian
-				comSerialBuffer[3], comSerialBuffer[2] };
-		uint16_t value = FAC_settings_bytes_to_uint16(valueRaw);
+		// the value is sent big endian (msB first), which is the order bytes_to_uint16 reads
+		uint16_t value = FAC_settings_bytes_to_uint16(&comSerialBuffer[2]);
 		FAC_settings_SET_value(setting_code, value);
 
 		CDC_Transmit_FS(&ping, 1);

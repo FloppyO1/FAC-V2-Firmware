@@ -28,6 +28,7 @@ typedef struct Servo {
 uint16_t FAC_servo_GET_position(uint8_t servoNumber);
 uint8_t FAC_servo_GET_is_enable(uint8_t servoNumber);
 uint8_t FAC_servo_GET_is_reversed(uint8_t servoNumber);
+uint16_t FAC_servo_GET_servo_freq(uint8_t servoNumber);
 void FAC_servo_set_position(uint8_t servoNumber, uint16_t position);
 void FAC_servo_enable(uint8_t servoNumber);
 void FAC_servo_disable(uint8_t servoNumber);

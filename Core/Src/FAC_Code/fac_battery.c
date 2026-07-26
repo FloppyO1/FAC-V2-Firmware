@@ -62,7 +62,7 @@ uint16_t FAC_battery_GET_cell_voltage() {
  * @bief 	Return the calculated battery type
  * @retval 	Return the calculate battery type enum value (1,2,3,4S, USB, UNKNOWN)
  */
-uint16_t FAC_battery_GET_type(uint16_t vbat) {
+uint8_t FAC_battery_GET_type(uint16_t vbat) {
 	FAC_battery_calculate_type(vbat);
 	return battery.type;
 }

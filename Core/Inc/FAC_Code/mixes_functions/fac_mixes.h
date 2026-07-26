@@ -54,7 +54,7 @@ enum FAC_MIXES_ID {			// 3) of HOW TO MAKE A MIX
 float FAC_mixes_GET_output(uint8_t outputNumber);
 float FAC_mixes_GET_input(uint8_t inputNumber);
 void FAC_mixes_update_mix_inputs();
-void FAC_mixes_update_mix_outputs();
+void FAC_mixes_update_mix_outputs(float mix_output[]);
 void FAC_mix_update();
 void FAC_mixes_init();
 

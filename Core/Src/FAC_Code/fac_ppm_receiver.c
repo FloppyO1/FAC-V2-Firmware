@@ -51,7 +51,7 @@ void FAC_ppm_receiver_Callback(uint8_t edge) {
  * @brief		Calculate the correct channel value from 0 to RECEIVER_CHANNEL_RESOLUTION. It will send it to the std_receiver object
  * @visibility	everyweher
  * @retval		the value of the channel
- * @note		TIM2 has a resolution of 0.5us (~35 min of period), not used the FAC_std_receiver_new_channel_value in rage return value
+ * @note		TIM2 has a resolution of 0.5us (~35 min of period)
  */
 void FAC_ppm_receiver_calculate_channels_values() {
 	for (int i = 0; i < PPM_RECEIVER_CHANNELS_NUMBER; i++) {

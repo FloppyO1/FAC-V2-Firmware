@@ -41,11 +41,9 @@ enum BATTERY_TYPE {
 };
 
 void FAC_battery_init();
-void FAC_battery_SET_calibration_offset(int16_t offset);
-uint16_t FAC_battery_GET_voltage ();
 uint16_t FAC_battery_GET_voltage();
 uint16_t FAC_battery_GET_cell_voltage();
-uint16_t FAC_battery_GET_type(uint16_t vbat);
+uint8_t FAC_battery_GET_type(uint16_t vbat);
 void FAC_battery_calculate_type(uint16_t vbat);
 int16_t FAC_battery_GET_calibration_offset();
 void FAC_battery_SET_calibration_offset(int16_t offset);

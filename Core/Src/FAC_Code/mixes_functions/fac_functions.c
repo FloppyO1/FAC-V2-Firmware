@@ -38,15 +38,26 @@ static uint8_t FAC_functions_GET_input_channel_number(uint8_t functionNumber) {
 
 /* ----------------------PUBBLIC FUNCTIONS---------------------- */
 
+/*
+ * @brief	Get the output of one of the special functions
+ * @note	functionNumber is 0 based, an out of range index returns 0.0f. The mapper link value
+ * 			(200+i) is only range checked against the settings table, so an invalid index can reach here
+ */
 float FAC_functions_GET_output(uint8_t functionNumber) {
+	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
+		return 0.0f;
 	return sFunctions.special_functions_outouts[functionNumber];
 }
 
 float FAC_functions_GET_input(uint8_t functionNumber) {
+	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
+		return 0.0f;
 	return sFunctions.special_functions_inputs[functionNumber];
 }
 
 void FAC_functions_SET_output(uint8_t functionNumber, float outputValue) {
+	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
+		return;
 	sFunctions.special_functions_outouts[functionNumber] = outputValue;
 }
 
@@ -77,6 +88,8 @@ void FAC_functions_update_inputs() {
 			float inputValue = map_float(chValue, 0.0f, 1.0f, -1.0f, 1.0f); // map the channel value to make it standard [-1.0 to 1.0]
 
 			FAC_functions_SET_input(i, inputValue);	// store the value into the struct array (where all mixes will take them)
+		} else {
+			FAC_functions_SET_input(i, 0.0f);	// disabled slot, do not leave a stale value behind
 		}
 	}
 }

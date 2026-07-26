@@ -94,7 +94,6 @@ void FAC_IMU_compute_gyro_offset() {
 HAL_StatusTypeDef FAC_IMU_init() {
 	HAL_StatusTypeDef gyro_status;
 	//STM_LOG("inizio init gyro", 50);
-	uint8_t retry = 0;
 	HAL_Delay(200);	// wait for the imu startup
 	gyro_status = LSM6DS3_init(FAC_IMU_GET_LSM6DS3_object(), &hi2c1);
 	if (gyro_status == HAL_ERROR) {

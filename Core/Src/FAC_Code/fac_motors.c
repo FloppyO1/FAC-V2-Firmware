@@ -40,7 +40,7 @@ uint16_t FAC_motor_GET_speed(uint8_t motorNumber) {
 	return motors[motorNumber - 1]->speed;
 }
 
-uint16_t FAC_motor_GET_reverse(uint8_t motorNumber) {
+uint8_t FAC_motor_GET_reverse(uint8_t motorNumber) {
 	return motors[motorNumber - 1]->is_reversed;
 }
 

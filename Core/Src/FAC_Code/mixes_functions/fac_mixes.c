@@ -69,11 +69,21 @@ static uint8_t FAC_mixes_GET_input_reversed(uint8_t inputNumber) {
 
 /* ----------------------PUBBLIC FUNCTIONS---------------------- */
 
+/*
+ * @brief	Get one of the outputs produced by the active mix
+ * @note	outputNumber is 0 based, an out of range index returns 0.0f. The mapper link value
+ * 			(100+i) is only range checked against the settings table, which cannot express
+ * 			"100..109 or 200..210", so an invalid index can reach here
+ */
 float FAC_mixes_GET_output(uint8_t outputNumber) {
+	if (outputNumber >= MIXES_MAX_OUTPUTS_NUMBER)
+		return 0.0f;
 	return mixes.mix_output[outputNumber];
 }
 
 float FAC_mixes_GET_input(uint8_t inputNumber) {
+	if (inputNumber >= MIXES_MAX_INPUTS_NUMBER)
+		return 0.0f;
 	return mixes.mix_input[inputNumber];
 }
 
@@ -103,9 +113,8 @@ void FAC_mixes_update_mix_inputs() {
 			float chValue = (float) (rxValue) / (float) (receiverResolution);// get the receiver channel value
 			float inputValue = map_float(chValue, 0.0f, 1.0f, -1.0f, 1.0f); // map the channel value to make it standard [-1.0 to 1.0]
 
-			// reverse input if it is reversed
-			if (FAC_settings_GET_value(
-					FAC_SETTINGS_CODE_MIX_INPUT1_REVERSED + i))
+			// reverse input if it is reversed (cached by init(), like the input channel number)
+			if (FAC_mixes_GET_input_reversed(i))
 				inputValue = inputValue * (-1.0f);
 
 			FAC_mixes_SET_input(i, inputValue);	// store the value into the struct array (where all mixes will take them)

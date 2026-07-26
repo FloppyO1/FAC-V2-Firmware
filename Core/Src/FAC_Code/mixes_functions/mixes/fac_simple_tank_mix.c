@@ -40,7 +40,8 @@
 //#include "FAC_Code/fac_fac_imu.h"		// if get_status == HAL_ERROR NOT USE data!!
 #include "stdlib.h"
 /* PRIVATE FUNCTIONS AND VARIABLES */
-static const uint8_t mix_id = FAC_MIX_SIMPLE_TANK;// 3) of HOW TO MAKE A MIX		(only to know witch mix is this)
+// marker only, it records which ID this file implements (see step 5): unused on purpose
+static const uint8_t __attribute__((unused)) mix_id = FAC_MIX_SIMPLE_TANK;// 3) of HOW TO MAKE A MIX		(only to know witch mix is this)
 
 /* WHAT THIS MIX DO */								// 7) of HOW TO MAKE A MIX
 /*

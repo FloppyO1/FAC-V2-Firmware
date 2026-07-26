@@ -47,7 +47,8 @@
 //#include "FAC_Code/fac_fac_imu.h"		// if get_status == HAL_ERROR NOT USE data!!
 
 /* PRIVATE FUNCTIONS AND VARIABLES */
-static const uint8_t first_special_function_id = FAC_SPECIAL_FUNCTION_DIRECT_LINK_TO_CHANNEL_1ST;	// 3) of HOW TO MAKE A SPECIAL FUNCTION		(only to know witch mix is this) in case of multiple usage, use the first ID
+// marker only, it records which ID this file implements (see step 5): unused on purpose
+static const uint8_t __attribute__((unused)) first_special_function_id = FAC_SPECIAL_FUNCTION_DIRECT_LINK_TO_CHANNEL_1ST;	// 3) of HOW TO MAKE A SPECIAL FUNCTION		(only to know witch mix is this) in case of multiple usage, use the first ID
 
 /* WHAT THIS SPECIAL FUNCTION DO */											// 7) of HOW TO MAKE A SPECIAL FUNCTION
 /*

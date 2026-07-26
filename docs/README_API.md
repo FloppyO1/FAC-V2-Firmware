@@ -274,7 +274,7 @@ Approximate cost of one `FAC_STATE_NORMAL` iteration: mapper ≈ 8 ms, arming ch
 
 ## 8. API reference
 
-Only functions declared in headers are part of the public API. Functions marked ⚠ have a documented caveat — see [Known issues](#11-known-issues).
+Only functions declared in headers are part of the public API. Functions still marked ⚠ have a documented caveat — see [Known issues](#11-known-issues).
 
 ### 8.1 `fac_app` — application core
 
@@ -360,7 +360,7 @@ Byte order note: this module stores **LSB first**, unlike the USB protocol which
 ```c
 void     FAC_std_reciever_init(uint8_t type);            // note: "reciever"
 uint16_t FAC_std_receiver_GET_channel(uint8_t chNumber);
-uint8_t  FAC_std_receiver_new_channel_value(uint8_t chNumber, uint16_t value);  // ⚠
+void     FAC_std_receiver_new_channel_value(uint8_t chNumber, uint16_t value);
 uint8_t  FAC_std_receiver_GET_is_connected(void);
 ```
 
@@ -368,7 +368,7 @@ uint8_t  FAC_std_receiver_GET_is_connected(void);
 |---|---|
 | `FAC_std_reciever_init` | Clears all channels and initialises the backend for `type` (`RECEIVER_TYPE_PWM` / `_PPM` / `_NRF24` / `_ELRS`). The last two are placeholders. *(Note the misspelling in the public name.)* |
 | `FAC_std_receiver_GET_channel` | Value of channel `chNumber` (**1-based**), `0 … RECEIVER_CHANNEL_RESOLUTION-1`. Triggers a recalculation from the active backend. Channels beyond the backend's capability return the last stored value; a `chNumber` outside `1 … RECEIVER_CHANNELS_NUMBER` returns `0` without touching any backend. |
-| `FAC_std_receiver_new_channel_value` | Backend → abstraction entry point: applies the deadzone, clamps, and stores. ⚠ Its return value does not mean what the comment claims. |
+| `FAC_std_receiver_new_channel_value` | Backend → abstraction entry point: applies the deadzone, clamps, and stores. |
 | `FAC_std_receiver_GET_is_connected` | `TRUE` once any channel has read non-zero. Polls one channel per call, round-robin over `1 … RECEIVER_CHANNELS_NUMBER`. Used as the arming gate. |
 
 Also defined here (overrides the HAL weak symbol):
@@ -383,7 +383,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);   // dispatches to the active re
 /* PWM — up to 4 channels, one pin each */
 void FAC_pwm_receiver_init(void);
 void FAC_pwm_receiver_Callback(uint8_t edge, uint16_t GPIO_Pin);
-void FAC_pwm_receiver_calculate_channel_value(uint8_t chNumber);   // ⚠ no bounds check
+void FAC_pwm_receiver_calculate_channel_value(uint8_t chNumber);   // no bounds check of its own
 
 /* PPM — up to 8 channels multiplexed on CH1 */
 void FAC_ppm_receiver_init(void);
@@ -407,13 +407,15 @@ void FAC_mapper_apply_to_devices(void);
 
 Reads the five mapper settings, updates only the referenced mix / special functions, converts their normalised outputs into device units and applies them. **Must be called every loop iteration** to keep outputs alive. Devices with link value `0` are actively disabled (motors to 0, servo PWM off).
 
+**Link value validity** — only `100 … 109` (mix outputs) and `200 … 210` (special function outputs) decode to a real output, but the setting's `{min, max}` is a single `0 … 210` interval and cannot express the gap, so `110 … 199` reaches the mapper. The output accessors bounds-check the index themselves and return `0.0f`, which makes an invalid link behave like "no output" instead of reading past the arrays — see issue #17.
+
 ### 8.7 `fac_mixes` — mix framework
 
 ```c
 void  FAC_mixes_init(void);
 void  FAC_mix_update(void);
 void  FAC_mixes_update_mix_inputs(void);
-void  FAC_mixes_update_mix_outputs(float mix_output[]);   // ⚠ header declares no parameters
+void  FAC_mixes_update_mix_outputs(float mix_output[]);
 float FAC_mixes_GET_input (uint8_t inputNumber);          // 0-based
 float FAC_mixes_GET_output(uint8_t outputNumber);         // 0-based
 ```
@@ -422,16 +424,18 @@ float FAC_mixes_GET_output(uint8_t outputNumber);         // 0-based
 |---|---|
 | `FAC_mixes_init` | Loads the active mix ID and per-input channel/reversal settings; zeroes inputs and outputs. Requires settings to be loaded first. |
 | `FAC_mix_update` | Dispatches to the active mix's update function. Add a `case` here for each new mix. |
-| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver, normalising `0…999` → `-1.0f…+1.0f` and applying per-input reversal. Disabled inputs (channel `0`) become `0.0f`. Called by the mix boilerplate. |
+| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver, normalising `0…999` → `-1.0f…+1.0f` and applying per-input reversal from the values cached by `init()`. Disabled inputs (channel `0`) become `0.0f`. Called by the mix boilerplate. |
 | `FAC_mixes_update_mix_outputs` | Copies a mix's local output array into the shared struct. **Must be called at the end of every mix update.** |
-| `FAC_mixes_GET_input` / `_GET_output` | Read the shared normalised arrays. |
+| `FAC_mixes_GET_input` / `_GET_output` | Read the shared normalised arrays. Both bounds-check the index and return `0.0f` when it is out of range — the mapper can reach them with an invalid link value (issue #17). |
+
+Both the input channel and the reversal flag are **cached at `init()`**, so changing either through USB takes effect on the next *apply*, not on the write itself.
 
 ### 8.8 `fac_functions` — special-function framework
 
 ```c
 void  FAC_functions_init(void);
 void  FAC_functions_update(uint8_t sFunctionID);
-void  FAC_functions_update_inputs(void);                          // ⚠
+void  FAC_functions_update_inputs(void);
 void  FAC_functions_SET_output(uint8_t functionNumber, float outputValue);
 float FAC_functions_GET_input (uint8_t functionNumber);
 float FAC_functions_GET_output(uint8_t functionNumber);
@@ -440,10 +444,10 @@ float FAC_functions_GET_output(uint8_t functionNumber);
 | Function | Description |
 |---|---|
 | `FAC_functions_init` | Loads each function's input channel from settings; zeroes inputs and outputs. |
-| `FAC_functions_update` | Dispatches to the implementation for `sFunctionID` (an `FAC_SPECIAL_FUNCTIONS_ID` value). ⚠ The three `DC_SERVO` IDs are declared but not implemented. |
-| `FAC_functions_update_inputs` | Refreshes all 20 inputs from the receiver, normalised to `[-1, +1]`. ⚠ Unlike the mix version, it leaves disabled slots at their stale value. |
-| `FAC_functions_SET_output` | Where a function publishes its result. |
-| `FAC_functions_GET_input` / `_GET_output` | Read the shared arrays. |
+| `FAC_functions_update` | Dispatches to the implementation for `sFunctionID` (an `FAC_SPECIAL_FUNCTIONS_ID` value). The three `DC_SERVO` IDs are declared but their function was never written — see issue #8. |
+| `FAC_functions_update_inputs` | Refreshes all 20 inputs from the receiver, normalised to `[-1, +1]`. Disabled slots (input channel `0`) are reset to `0.0f`, like the mix version. |
+| `FAC_functions_SET_output` | Where a function publishes its result. Ignores an out-of-range `functionNumber`. |
+| `FAC_functions_GET_input` / `_GET_output` | Read the shared arrays. Both bounds-check the index and return `0.0f` when it is out of range — the mapper can reach them with an invalid link value (issue #17). |
 
 Implemented behaviours:
 
@@ -482,13 +486,13 @@ void FAC_motor_make_noise(uint16_t freq, uint16_t duration);   // blocking
 | Brake enabled | `pinB = MAX - speed`, `pinF = MAX` | `pinF = MAX - speed`, `pinB = MAX` |
 | Coast enabled | `pinF = speed`, `pinB = 0` | `pinB = speed`, `pinF = 0` |
 
-Getters exist in the `.c` (`FAC_motor_GET_direction`, `_GET_speed`, `_GET_reverse`, `_GET_brake_en`) but are **not declared in the header**.
+`FAC_motor_GET_direction`, `_GET_speed`, `_GET_reverse` and `_GET_brake_en` are declared in the header alongside the setters.
 
 ### 8.10 `fac_servo` — servo outputs
 
 ```c
 void     FAC_servo_init(void);
-void     FAC_servo_set_position(uint8_t servoNumber, uint16_t position);   // ⚠
+void     FAC_servo_set_position(uint8_t servoNumber, uint16_t position);
 void     FAC_servo_enable (uint8_t servoNumber);
 void     FAC_servo_disable(uint8_t servoNumber);
 void     FAC_servo_is_reversed(uint8_t servoNumber, uint8_t isReversed);
@@ -503,13 +507,12 @@ uint8_t  FAC_servo_GET_is_reversed(uint8_t servoNumber);
 | `FAC_servo_set_position` | Sets and applies position `0 … MAX_SERVO_VALUE`, mapped into the configured `[min_us, max_us]` pulse window. Reversal applied internally. |
 | `FAC_servo_enable` / `_disable` | Enables/disables the PWM. Disabling writes `CCR = 0`, producing no pulse at all. |
 | `FAC_servo_is_reversed` | Sets the reversal flag and re-applies. |
-| `FAC_servo_GET_*` | Accessors. |
+| `FAC_servo_GET_*` | Accessors, including `FAC_servo_GET_servo_freq()`. |
 
 TIM3 is prescaled to **1000 ticks per millisecond**, so a pulse width in microseconds maps directly onto the CCR value at any frame rate; the period is recomputed as `(1000 × SERVO_RESOLUTION) / frequency`.
 
 Position → pulse width is `CCR = min_us + (span × position) / MAX_SERVO_VALUE`, where `span = max_us - min_us`. The multiplication is done in **32 bit on purpose**: the widest configurable span (2800 µs) times the maximum position (999) is ≈ 2.8 M and does not fit in 16 bit. Since `position` is clamped to `MAX_SERVO_VALUE`, full deflection reaches exactly the configured `max_us`. Note that `MAX_SERVO_VALUE` is parenthesised in the header precisely because it is used as a divisor here.
 
-`FAC_servo_GET_servo_freq()` exists in the `.c` but is not declared in the header.
 
 ### 8.11 `fac_adc` — analog front end
 
@@ -533,7 +536,7 @@ uint16_t FAC_adc_get_raw_channel_value(uint8_t chNumber);
 void     FAC_battery_init(void);
 uint16_t FAC_battery_GET_voltage(void);
 uint16_t FAC_battery_GET_cell_voltage(void);
-uint16_t FAC_battery_GET_type(uint16_t vbat);
+uint8_t  FAC_battery_GET_type(uint16_t vbat);
 void     FAC_battery_calculate_type(uint16_t vbat);
 void     FAC_battery_SET_calibration_offset(int16_t offset);
 int16_t  FAC_battery_GET_calibration_offset(void);
@@ -630,7 +633,7 @@ Returns `USBD_BUSY` if the previous transfer has not completed — **the firmwar
 
 ## 9. USB protocol reference
 
-Virtual COM port (CDC). The host sends a small command packet; the device answers. **Multi-byte values are big-endian on the wire** (MSB first), while the MCU is little-endian — conversions are explicit in the code.
+Virtual COM port (CDC). The host sends a small command packet; the device answers. **Multi-byte values are big-endian on the wire** (MSB first), while the MCU is little-endian — conversions are explicit in `FAC_settings_uint16_to_bytes()` and `FAC_settings_bytes_to_uint16()`, which are exact inverses, so callers hand the wire bytes over in order without swapping.
 
 ### Command codes (`enum FAC_USB_COMMAND_CODE`)
 
@@ -702,18 +705,19 @@ Adding a new `.c` file requires regenerating the STM32CubeIDE build files (`Debu
 
 ## 11. Known issues
 
-Found while documenting the code. Ordered by severity; numbering is kept stable, so entries move to [11.1 Fixed](#111-fixed) or [11.2 Withdrawn](#112-withdrawn-not-bugs) instead of being renumbered. The same list is tracked in [CLAUDE.md](CLAUDE.md).
+Found while documenting the code. Numbering is kept stable, so entries move to [11.1 Fixed](#111-fixed) or [11.2 Withdrawn](#112-withdrawn-not-bugs) instead of being renumbered. The same list is tracked in [CLAUDE.md](CLAUDE.md).
+
+The original list is now closed. What remains is one enum entry whose feature was never written:
 
 | # | Severity | Location | Issue |
 |---|---|---|---|
-| 8 | **Low** | `fac_functions.c` | `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are declared in the enum and reachable via the mapper (`200+8` … `200+10`), but have no `case` in `FAC_functions_update()` — they silently output a constant `0.0f`. |
-| 9 | **Low** | `fac_settings.c` | `FAC_settings_uint16_to_bytes()` writes MSB-first while `FAC_settings_bytes_to_uint16()` reads LSB-first, and the latter's comment claims MSB-first. They are not inverses; callers compensate by swapping bytes manually. A trap for future maintainers. |
-| 11 | **Low** | `fac_functions.c` `FAC_functions_update_inputs()` | Does not reset disabled slots to `0.0f`, unlike the equivalent mix function — stale values persist. |
-| 12 | **Low** | `fac_mixes.c` | `mix_input_reversed[]` is populated in `init()` but never read; `FAC_mixes_update_mix_inputs()` re-reads the setting directly. Dead state. |
-| 13 | **Low** | `fac_mixes.h` | `FAC_mixes_update_mix_outputs()` is declared with empty parentheses but defined taking `float[]` — legal C but no type checking at call sites. |
-| 14 | **Low** | `fac_std_receiver.c` | `FAC_std_receiver_new_channel_value()` compares the pre-deadzone input against the post-deadzone stored value, so it reports "out of range" whenever the deadzone changes the value. All callers ignore the return. |
-| 15 | **Info** | `fac_motors.h`, `fac_servo.h` | `FAC_motor_GET_*` and `FAC_servo_GET_servo_freq()` are non-static but absent from the headers — unusable without a manual `extern`. |
-| 16 | **Info** | `fac_battery.h` | `FAC_battery_GET_voltage()` and `FAC_battery_SET_calibration_offset()` are each declared twice; `FAC_battery_GET_type()` returns `uint16_t` for a `uint8_t` value. |
+| 8 | **Not a defect** | `fac_functions.c` | `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are declared in the enum and reachable via the mapper (`200+8` … `200+10`), but have no `case` in `FAC_functions_update()`, so they output a constant `0.0f`. The DC-servo function was simply never implemented — this is a feature to write, not a bug to fix. The read stays in bounds (the outputs array holds 20 entries). |
+
+Found later, outside the original list, and **not** addressed:
+
+| Location | Issue |
+|---|---|
+| `fac_mapper.c` `FAC_mapper_apply_to_devices()` | Iterates with `for (int i = 0; i < sizeof(links); i++)` over `uint8_t links[5]`. Correct only because the element size happens to be 1 byte; widening the array's type would silently overrun it. |
 
 ### 11.1 Fixed
 
@@ -725,7 +729,15 @@ Found while documenting the code. Ordered by severity; numbering is kept stable,
 | 4 | **Medium** | `fac_settings.c` `FAC_settings_SET_value()` and the USB send helpers | The setting code arrives straight from USB (`comSerialBuffer[1]`, so `0…255`) and was never checked against `FAC_SETTINGS_CODE_LAST` (64), giving an out-of-bounds read/write on `settings[]` from a single malformed 4-byte packet. `Setting` is 8 bytes and the committed build placed `.data.settings` at `0x20000000`, the very first object in RAM, so `settings[code].value` reached `SystemCoreClock` at code 64, `uwTickPrio` at 65, and the USB CDC configuration descriptors from 66 on — and the value stored was arbitrary anyway, since the clamp read a garbage `min`/`max`. `FAC_settings_GET_value()` already checked. | The same guard added to all three: `if (code >= FAC_SETTINGS_CODE_LAST) return;`. An unknown code is now ignored on write and gets no reply on the two read commands. The `WRITE` ack byte is unchanged — `command_response()` still sends it — since a NACK convention would be a FAC Tool protocol change. |
 | 6 | **Medium** | `fac_jingles.c` | Called `FAC_motor_make_noise()` without including `FAC_Code/fac_motors.h`; it compiled only via implicit declaration (a `-Wall` warning, and an error under C99+ strictness). | Fixed by the author: `#include "FAC_Code/fac_motors.h"` added to `fac_jingles.c`. |
 | 7 | **Low** | `fac_servo.c` `FAC_servo_apply_settings()` | `((max-min)/100) * position / 10` truncated the span before scaling, losing up to ~100 µs of travel at full deflection, and a span below 100 µs made `span/100` evaluate to `0` — pinning the servo at `min_us` for every stick position. The settings ranges permit a span as small as 2 µs (`min ≤ 1499`, `max ≥ 1501`). The `/100` was there to avoid a 16-bit overflow, since `span × position` can reach ≈ 2.8 M. The default 1000/2000 configuration hid the bug entirely: `span/100 = 10` exactly, so the result was exact. | Single division on a 32-bit intermediate: `p = ((uint32_t) span * position) / MAX_SERVO_VALUE`. `MAX_SERVO_VALUE` was `RECEIVER_CHANNEL_RESOLUTION-1` **without parentheses** — harmless in the existing comparison/subtraction uses but wrong as a divisor, so it is now parenthesised. At full deflection the default config now reaches `CCR = 2000` instead of 1999. |
+| 9 | **Low** | `fac_settings.c` | `FAC_settings_uint16_to_bytes()` wrote MSB-first while `FAC_settings_bytes_to_uint16()` read LSB-first, and the latter's comment claimed MSB-first. They were not inverses, and the single caller compensated by building a swapped temporary (`{comSerialBuffer[3], comSerialBuffer[2]}`). Harmless but a trap for anyone using them as a pair. | `bytes_to_uint16()` is now MSB-first (`array[0] << 8 | array[1]`), matching its comment and the wire format, so the two are exact inverses. The caller passes `&comSerialBuffer[2]` straight through — no temporary, no swap. |
 | 10 | **Low** | `fac_app.c` cut-off check | `BATTERY_TYPE_NONE` has the value 5 and was used directly as a cell-count multiplier (`CUTOFF_VOLTAGE_MV × batteryType`), giving a 14000 mV threshold that can never be reached — so an unrecognised pack forced CUTOFF after the detection time. Safe, but accidental. | The multiplication is gone: the per-cell threshold is now compared against the per-cell voltage, and the three special cases are explicit — threshold `0` (user-disabled) and `BATTERY_TYPE_USB` always reset the timer, `BATTERY_TYPE_NONE` never does, so an unknown pack still ends in CUTOFF but **on purpose**. The enum values themselves are unchanged (the FAC Tool depends on them). |
+| 11 | **Low** | `fac_functions.c` `FAC_functions_update_inputs()` | Did not reset disabled slots to `0.0f`, unlike the equivalent mix function, so a stale input could persist. No observable effect: the input channels only change through `FAC_functions_init()`, which zeroes every input, so a disabled slot always read `0.0f` anyway. | `else { FAC_functions_SET_input(i, 0.0f); }` added, matching `FAC_mixes_update_mix_inputs()`. |
+| 12 | **Low** | `fac_mixes.c` | `mix_input_reversed[]` was populated in `init()` but never read — `FAC_mixes_GET_input_reversed()` had no callers at all (a `-Wunused-function` warning), and `FAC_mixes_update_mix_inputs()` re-read the setting on every input, every loop. | The cached field is now the one used: `if (FAC_mixes_GET_input_reversed(i))`. That drops 8 `FAC_settings_GET_value()` calls per loop and makes the flag consistent with `mix_input_channels_number`, which was already cached. **Behaviour note**: reversal now takes effect on *apply* rather than on the USB write, exactly like the input channel already did. |
+| 13 | **Low** | `fac_mixes.h` | `FAC_mixes_update_mix_outputs()` was declared with empty parentheses but defined taking `float[]` — legal C but no type checking at call sites, and a hard error under C23 where `()` means `(void)`. | Declared as `void FAC_mixes_update_mix_outputs(float mix_output[]);`. |
+| 14 | **Low** | `fac_std_receiver.c` | `FAC_std_receiver_new_channel_value()` compared the pre-deadzone input against the post-deadzone stored value, so it reported "out of range" whenever the deadzone changed the value — which, with any non-zero deadzone, is almost always. Every caller ignored the return. | The function returns `void`. The two receiver backends' `@note` lines referring to the return value were removed. |
+| 15 | **Info** | `fac_motors.h`, `fac_servo.h` | `FAC_motor_GET_*` and `FAC_servo_GET_servo_freq()` were non-static but absent from the headers — unusable without a manual `extern`. | Declared in their headers, matching the other modules (`fac_servo`, `fac_battery` and `fac_app` all expose their `GET_` accessors). `FAC_motor_GET_reverse()` also returned `uint16_t` for a `uint8_t` field; it now returns `uint8_t`. |
+| 16 | **Info** | `fac_battery.h` | `FAC_battery_GET_voltage()` and `FAC_battery_SET_calibration_offset()` were each declared twice; `FAC_battery_GET_type()` returned `uint16_t` for a `uint8_t` value. | Duplicates removed, return type narrowed to `uint8_t` in both the header and `fac_battery.c`. Callers were already assigning it to `uint8_t`. |
+| 17 | **Medium** | `fac_mapper.c`, `fac_mixes.c`, `fac_functions.c` | Found while investigating #8, not part of the original list. The mapper settings have a single range of `0…210`, but only `100…109` (mix outputs) and `200…210` (function outputs) decode to something real. A value in **`110…199`** passed validation, entered the mix branch, and produced `FAC_mixes_GET_output(10…99)` — up to 90 floats read past the end of a 10-element array. The garbage float became a motor speed (`\|val\| × 1000`, then clamped to `MAX_DMA_PWM_VALUE`), so a mapper value of e.g. 150 could **spin a motor at full speed** in an arbitrary direction, and the value persisted to EEPROM. | `FAC_mixes_GET_output/_GET_input` and `FAC_functions_GET_output/_GET_input/_SET_output` bounds-check their index and return `0.0f` (or ignore the write) when it is out of range, so an invalid link resolves to "no output" for every caller. `FAC_mapper_apply_to_devices()` additionally guards its `functionsUpdated[]` index. The settings range is unchanged — it cannot express a gap, which is why the check belongs in the accessors. |
 
 ### 11.2 Withdrawn (not bugs)
 
