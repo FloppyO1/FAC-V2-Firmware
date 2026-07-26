@@ -461,7 +461,7 @@ void FAC_motor_set_brake_status(uint8_t motorNumber, uint8_t state);
 void FAC_motor_enable_brake (uint8_t motorNumber);
 void FAC_motor_disable_brake(uint8_t motorNumber);
 void FAC_motor_is_reversed  (uint8_t motorNumber, uint8_t isReversed);
-void FAC_motor_make_noise(uint16_t freq, uint16_t duration);   // ⚠ blocking
+void FAC_motor_make_noise(uint16_t freq, uint16_t duration);   // blocking
 ```
 
 | Function | Description |
@@ -471,7 +471,9 @@ void FAC_motor_make_noise(uint16_t freq, uint16_t duration);   // ⚠ blocking
 | `FAC_motor_set_brake_status` | Brake (`TRUE`) vs. coast (`FALSE`) mode. Takes effect on the next apply. |
 | `FAC_motor_enable_brake` / `_disable_brake` | Convenience wrappers over the above. |
 | `FAC_motor_is_reversed` | Sets the per-motor reversal flag. |
-| `FAC_motor_make_noise` | Turns all three motors into a buzzer at `freq` Hz for `duration` ms, then restores the configured PWM frequency and stops the motors. **Blocking**; refreshes the watchdog internally. ⚠ See issue #5. |
+| `FAC_motor_make_noise` | Turns all three motors into a buzzer at `freq` Hz for `duration` ms, then restores the configured PWM frequency and stops the motors. **Blocking**; refreshes the watchdog internally. |
+
+**How the buzzer actually works** — this is easy to misread. The tone is the **soft-PWM repetition rate itself**: `FAC_DMA_pwm_change_freq(freq)` sets `TIM1->ARR = TIMER_FREQ / (PWM_STEPS * freq) - 1`, so with `TIMER_FREQ = 48 MHz` and `PWM_STEPS = 1000` a `NOTE_C6 = 1047` gives `ARR = 44` → a PWM period of `1000 × 45 / 48 MHz = 0.9375 ms` ≈ 1067 Hz. The DMA keeps pushing that pulse train into the coils at 5 % duty until the frequency and speed are restored, so the note is heard **during the wait loop**, which runs ~1 ms per iteration because `HAL_Delay(0)` still waits for the next SysTick tick (`wait += uwTickFreq` in `stm32f0xx_hal.c`). The direction-toggling `while` below it only gets the leftover (≤ ~1 ms of a 125 ms note) and contributes essentially nothing. **Do not remove the wait loop** — it is what gives the note its length.
 
 **Driver logic** — the H-bridges are driven **IN/IN**, not PH/EN, and the duty is *inverted* in brake mode:
 
@@ -698,11 +700,10 @@ Adding a new `.c` file requires regenerating the STM32CubeIDE build files (`Debu
 
 ## 11. Known issues
 
-Found while documenting the code. Ordered by severity; numbering is kept stable, so fixed entries move to [11.1](#111-fixed) instead of being renumbered. The same list is tracked in [CLAUDE.md](CLAUDE.md).
+Found while documenting the code. Ordered by severity; numbering is kept stable, so entries move to [11.1 Fixed](#111-fixed) or [11.2 Withdrawn](#112-withdrawn-not-bugs) instead of being renumbered. The same list is tracked in [CLAUDE.md](CLAUDE.md).
 
 | # | Severity | Location | Issue |
 |---|---|---|---|
-| 5 | **Medium** | `fac_motors.c` `FAC_motor_make_noise()` | The `for` loop of `HAL_Delay(0)` before the tone loop consumes roughly the whole `duration` (each `HAL_Delay(0)` waits ~1 tick), so the audible part may be near-zero while the call still blocks for ~2× `duration`. Looks like leftover debug code — worth verifying on hardware. |
 | 6 | **Medium** | `fac_jingles.c` | Calls `FAC_motor_make_noise()` without including `FAC_Code/fac_motors.h`; it compiles only via implicit declaration (a `-Wall` warning). |
 | 7 | **Low** | `fac_servo.c` `FAC_servo_apply_settings()` | `((max-min)/100) * position / 10` truncates: up to ~99 µs of travel is lost, and if the configured span is under 100 µs the servo is stuck at the minimum. Settings ranges permit a span as small as 2 µs. |
 | 8 | **Low** | `fac_functions.c` | `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are declared in the enum and reachable via the mapper (`200+8` … `200+10`), but have no `case` in `FAC_functions_update()` — they silently output a constant `0.0f`. |
@@ -723,6 +724,12 @@ Found while documenting the code. Ordered by severity; numbering is kept stable,
 | 3 | **High** | `LSM6DS3.h` / `fac_imu.h` | `int16_t gyro_offsets[]` was a flexible array member, so it contributed 0 to `sizeof(LSM6DS3)` (28 bytes) and had no storage — yet `LSM6DS3` is embedded **by value** inside `Gyro`. Verified against the committed build: `gyro` sat at `0x200003e0` with `sizeof(Gyro) == 0x20`, `gyro_status` at offset 28, and `.bss.motors` immediately after at `0x20000400`. `LSM6DS3_calculate_offset()` stored `[0]`→bytes 28-29 (**over `gyro_status`**), `[1]`→30-31 (padding), `[2]`→32-33 (**past `gyro`, onto the low half-word of `motors[0]`, the Motor 1 pointer**). Latent only by luck of init ordering: `FAC_IMU_GET_status()` is read before the calibration and `FAC_motor_init()` reassigns `motors[0]` right after it. Also a C99/C11 constraint violation (§6.7.2.1p3) that GCC accepts silently. | The array is now sized: `int16_t gyro_offsets[LSM6DS3_AXIS_NUMBER]`, with the new `LSM6DS3_AXIS_NUMBER` (3) also replacing the hardcoded `3` in the three axis loops. `sizeof(LSM6DS3)` 28 → 36, `sizeof(Gyro)` 32 → 40; 8 bytes of RAM, no signature or protocol change. |
 | 4 | **Medium** | `fac_settings.c` `FAC_settings_SET_value()` and the USB send helpers | The setting code arrives straight from USB (`comSerialBuffer[1]`, so `0…255`) and was never checked against `FAC_SETTINGS_CODE_LAST` (64), giving an out-of-bounds read/write on `settings[]` from a single malformed 4-byte packet. `Setting` is 8 bytes and the committed build placed `.data.settings` at `0x20000000`, the very first object in RAM, so `settings[code].value` reached `SystemCoreClock` at code 64, `uwTickPrio` at 65, and the USB CDC configuration descriptors from 66 on — and the value stored was arbitrary anyway, since the clamp read a garbage `min`/`max`. `FAC_settings_GET_value()` already checked. | The same guard added to all three: `if (code >= FAC_SETTINGS_CODE_LAST) return;`. An unknown code is now ignored on write and gets no reply on the two read commands. The `WRITE` ack byte is unchanged — `command_response()` still sends it — since a NACK convention would be a FAC Tool protocol change. |
 | 10 | **Low** | `fac_app.c` cut-off check | `BATTERY_TYPE_NONE` has the value 5 and was used directly as a cell-count multiplier (`CUTOFF_VOLTAGE_MV × batteryType`), giving a 14000 mV threshold that can never be reached — so an unrecognised pack forced CUTOFF after the detection time. Safe, but accidental. | The multiplication is gone: the per-cell threshold is now compared against the per-cell voltage, and the three special cases are explicit — threshold `0` (user-disabled) and `BATTERY_TYPE_USB` always reset the timer, `BATTERY_TYPE_NONE` never does, so an unknown pack still ends in CUTOFF but **on purpose**. The enum values themselves are unchanged (the FAC Tool depends on them). |
+
+### 11.2 Withdrawn (not bugs)
+
+| # | Location | Was reported as | Why it is not a bug |
+|---|---|---|---|
+| 5 | `fac_motors.c` `FAC_motor_make_noise()` | The `for` loop of `HAL_Delay(0)` consumes the whole `duration`, so the audible part is near-zero while the call blocks for ~2× `duration`. | Verified on hardware: the jingles sound correct. The report assumed the tone comes from the direction-toggling `while` loop, but **the tone is the soft-PWM repetition rate itself** — `FAC_DMA_pwm_change_freq(freq)` drives the coils with a 5 % duty pulse train at `freq`, which keeps sounding until the frequency and speed are restored. So the note is heard *during* the supposedly wasted wait loop, for its full `duration`. Total blocking is ≈ `duration`, not 2×, and the direction loop only gets the leftover (≤ ~1 ms of a 125 ms note). Removing the wait loop would have shortened every note to nothing and hammered the IN/IN driver with kHz-rate reversals. The mechanism is now documented in [§ 8.9](#89-fac_motors--dc-motor-outputs) and in a comment above the function. |
 
 ---
 

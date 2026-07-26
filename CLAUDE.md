@@ -82,7 +82,7 @@ Adding a setting: append to the enum before `FAC_SETTINGS_CODE_LAST`, append the
 `Core/Src/Libraries/DMApwm.c` generates PWM on **all 6 motor pins simultaneously** by DMA-ing a 1000-entry word buffer into `GPIOA->BSRR`, paced by TIM1 update events. Consequences:
 
 - **Only port A pins work** (the port-B buffer is present but commented out). All motor pins are PA2–PA7.
-- Frequency changes are done by writing `htim1.Instance->ARR = (TIMER_FREQ / (PWM_STEPS * freq)) - 1`, which is how `FAC_motor_make_noise()` turns the motors into a buzzer (blocking — it refreshes the IWDG in its loops).
+- Frequency changes are done by writing `htim1.Instance->ARR = (TIMER_FREQ / (PWM_STEPS * freq)) - 1`, which is how `FAC_motor_make_noise()` turns the motors into a buzzer (blocking — it refreshes the IWDG in its loops). **The audible tone is that PWM repetition rate**, not the direction-toggling loop at the end of the function: the coils get a 5 % duty pulse train at `freq` and keep sounding for the whole wait loop (`HAL_Delay(0)` still costs ~1 ms per call because the HAL rounds up to the next tick). Don't "optimize away" that loop — it is what gives each note its length.
 - Motor logic is **IN/IN driver, not PH/EN**. With brake enabled the duty is *inverted* (`MAX_DMA_PWM_VALUE - speed` on one pin, full on the other); with brake disabled it's plain duty + 0. See the truth table in `FAC_motor_apply_settings()`.
 
 ### Other modules
@@ -119,10 +119,11 @@ In both cases the touch points are: the ID enum (`FAC_MIXES_ID` / `FAC_SPECIAL_F
 
 ## Known issues (unfixed)
 
-Found during the API documentation pass; they are being fixed one at a time — until then, do not silently "correct" this code as a side effect of another task, and do not assume the surrounding behaviour is intentional. Full descriptions in [README_API.md](docs/README_API.md#11-known-issues). **Numbering is stable**: a fixed issue is removed from this list and moved to [README_API.md § 11.1 Fixed](docs/README_API.md#111-fixed), the others keep their number.
+Found during the API documentation pass; they are being fixed one at a time — until then, do not silently "correct" this code as a side effect of another task, and do not assume the surrounding behaviour is intentional. Full descriptions in [README_API.md](docs/README_API.md#11-known-issues). **Numbering is stable**: a closed issue is removed from this list and moved to [README_API.md § 11.1 Fixed](docs/README_API.md#111-fixed) or [§ 11.2 Withdrawn](docs/README_API.md#112-withdrawn-not-bugs), the others keep their number.
+
+The list is a set of *suspicions*, not verified defects — issue #5 turned out to be a misreading of working code, and "fixing" it would have broken the jingles. Confirm the mechanism (and ask the user, who has the hardware) before changing anything.
 
 **Medium**
-5. `fac_motors.c` `FAC_motor_make_noise()` — the `HAL_Delay(0)` loop before the tone loop burns ≈ the whole `duration` (each call waits ~1 tick), so the audible portion may be near zero while the call blocks ~2× as long. Verify on hardware before changing.
 6. `fac_jingles.c` calls `FAC_motor_make_noise()` with no `#include "FAC_Code/fac_motors.h"` — compiles only via implicit declaration.
 
 **Low / informational**

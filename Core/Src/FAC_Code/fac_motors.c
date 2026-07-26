@@ -162,6 +162,14 @@ void FAC_motor_set_speed_direction(uint8_t motorNumber, uint8_t dir, uint16_t sp
 /**
  * @brief 			Set the values of speed of the motor to make some beeping noise (blocking function)
  * @note 			This function block the code execution for duration ms. All DC motor will make noise
+ * @IMPORTANT		The audible tone IS the soft-PWM repetition rate, not the direction toggling below.
+ * 					FAC_DMA_pwm_change_freq(freq) makes the DMA drive the coils with a 5% duty pulse
+ * 					train at freq, and that keeps sounding until the frequency and the speed are
+ * 					restored at the end. The tone is therefore heard during the wait loop, which lasts
+ * 					~duration ms because HAL_Delay(0) still waits for the next SysTick tick
+ * 					(stm32f0xx_hal.c does "wait += uwTickFreq"). By the time the direction loop is
+ * 					reached the budget is spent, so it only runs for the leftover (<= ~1 ms).
+ * 					Do not "optimize away" the wait loop: it is what gives the note its length.
  */
 void FAC_motor_make_noise(uint16_t freq, uint16_t duration) {
 	FAC_DMA_pwm_change_freq(freq);
@@ -170,7 +178,7 @@ void FAC_motor_make_noise(uint16_t freq, uint16_t duration) {
 		FAC_motor_apply_settings(i);
 	}
 	uint32_t timerSound = HAL_GetTick();
-	for (int i = 0; i < duration; i++) {
+	for (int i = 0; i < duration; i++) {	// this is where the tone is actually heard, ~1ms per iteration
 		HAL_IWDG_Refresh(&hiwdg);
 		HAL_Delay(0);
 	}

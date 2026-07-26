@@ -8,6 +8,7 @@
 #include "jingles/fac_jingles.h"
 #include "jingles/notes.h"
 #include "iwdg.h"
+#include "FAC_Code/fac_motors.h"
 
 /*
  * @brief	Delay with watchdog, otherwise it will reset the MCU
