@@ -20,7 +20,7 @@ STM32CubeIDE (Eclipse CDT) project — `.project`, `.cproject`, `FAC_Firmware_V2
 - **CLI build**: `make -C Debug all` (needs `arm-none-eabi-gcc` from *GNU Tools for STM32 13.3.rel1* and `make` on PATH — neither is on PATH in this environment by default).
 - `Debug/makefile` and `Debug/**/subdir.mk` are **auto-generated and contain absolute paths** (`D:\GITHUB\Floppy-Ant-Controller\...`). Never hand-edit them; adding a new `.c` file requires regenerating them from the IDE (refresh/rebuild the project), otherwise the file silently isn't compiled.
 - Compile flags: `-mcpu=cortex-m0 -std=gnu11 -O3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32F072xB --specs=nano.specs`. Linker script `STM32F072CBTX_FLASH.ld`.
-- **`Debug/` build artifacts (`.o`, `.d`, `.su`, `.elf`, `.map`) are committed to git.** Any rebuild dirties the working tree — check `git status` before assuming you changed something.
+- **`Debug/` and `Release/` are git-ignored** (see `.gitignore`) — build artifacts and the generated makefiles are not versioned, so a fresh clone has to be built from the IDE once before `make -C Debug all` works. They were tracked up to and including commit `ac46e5f`, so `.o`/`.elf`/`.map` from older revisions are still reachable in history.
 - There are **no unit tests** and no host-side test harness. Verification is on hardware (or via the FAC Tool with `IM_TESTING_FAC_TOOL`, see below).
 
 ### Regenerating from CubeMX
@@ -120,9 +120,6 @@ In both cases the touch points are: the ID enum (`FAC_MIXES_ID` / `FAC_SPECIAL_F
 ## Known issues (unfixed)
 
 Found during the API documentation pass; they are being fixed one at a time — until then, do not silently "correct" this code as a side effect of another task, and do not assume the surrounding behaviour is intentional. Full descriptions in [README_API.md](docs/README_API.md#11-known-issues). **Numbering is stable**: a fixed issue is removed from this list and moved to [README_API.md § 11.1 Fixed](docs/README_API.md#111-fixed), the others keep their number.
-
-**High**
-3. `LSM6DS3.h` — `int16_t gyro_offsets[]` is a flexible array member inside a struct embedded **by value** in `Gyro`. `LSM6DS3_calculate_offset()` writes 6 bytes past the struct end, landing on `gyro_status` and beyond.
 
 **Medium**
 4. `fac_settings.c` — the setting code comes straight from USB and is never bounds-checked in `FAC_settings_SET_value()` / `FAC_settings_USB_SEND_setting_value()` / `_ranges()`; only `FAC_settings_GET_value()` checks.

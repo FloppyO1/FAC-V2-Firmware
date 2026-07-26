@@ -552,7 +552,7 @@ Conversion: `mV = (VDDA_µV / adcResolution) × rawSample × dividerRatio / 1e6`
 HAL_StatusTypeDef FAC_IMU_init(void);
 void FAC_IMU_init_accelerometer(void);
 void FAC_IMU_init_gyroscope(void);
-void FAC_IMU_compute_gyro_offset(void);          // ⚠
+void FAC_IMU_compute_gyro_offset(void);
 HAL_StatusTypeDef FAC_IMU_GET_status(void);
 float FAC_IMU_GET_accel_X(void);  // g
 float FAC_IMU_GET_accel_Y(void);
@@ -576,10 +576,12 @@ void LSM6DS3_update_accelerometer_single_value(LSM6DS3 *obj, uint8_t axis);
 void LSM6DS3_update_accelerometer_all_values  (LSM6DS3 *obj);
 void LSM6DS3_update_gyroscope_single_value    (LSM6DS3 *obj, uint8_t axis);
 void LSM6DS3_update_gyroscope_all_values      (LSM6DS3 *obj);
-void LSM6DS3_calculate_offset(LSM6DS3 *obj);     // ⚠ see issue #3
+void LSM6DS3_calculate_offset(LSM6DS3 *obj);
 ```
 
 `LSM6DS3_init` verifies `WHO_AM_I == 0x6A` and returns `HAL_ERROR` if a different device answers. Results are written into the object's `acc_*` (g) and `gyro_*` (deg/s) fields; `axis` is `X_AXIS` / `Y_AXIS` / `Z_AXIS`.
+
+`LSM6DS3_calculate_offset` averages 200 gyro samples per axis and stores the negated result in `gyro_offsets[LSM6DS3_AXIS_NUMBER]`, which `LSM6DS3_update_gyroscope_single_value` then adds to every reading. The call blocks for ~1 s and refreshes the IWDG in its loop.
 
 ### 8.15 `Libraries/DMApwm` — soft-PWM engine
 
@@ -700,7 +702,6 @@ Found while documenting the code. Ordered by severity; numbering is kept stable,
 
 | # | Severity | Location | Issue |
 |---|---|---|---|
-| 3 | **High** | `LSM6DS3.h` / `fac_imu.h` | `int16_t gyro_offsets[]` is a flexible array member, but `LSM6DS3` is embedded **by value** inside `Gyro` with no allocation for it. `LSM6DS3_calculate_offset()` writes 6 bytes past the struct, corrupting `gyro_status` and adjacent statics. |
 | 4 | **Medium** | `fac_settings.c` `FAC_settings_SET_value()` and the USB send helpers | The setting code arrives straight from USB and is never checked against `FAC_SETTINGS_CODE_LAST`, giving an out-of-bounds read/write on `settings[]` from a malformed packet. `FAC_settings_GET_value()` does check — the others should too. |
 | 5 | **Medium** | `fac_motors.c` `FAC_motor_make_noise()` | The `for` loop of `HAL_Delay(0)` before the tone loop consumes roughly the whole `duration` (each `HAL_Delay(0)` waits ~1 tick), so the audible part may be near-zero while the call still blocks for ~2× `duration`. Looks like leftover debug code — worth verifying on hardware. |
 | 6 | **Medium** | `fac_jingles.c` | Calls `FAC_motor_make_noise()` without including `FAC_Code/fac_motors.h`; it compiles only via implicit declaration (a `-Wall` warning). |
@@ -720,6 +721,7 @@ Found while documenting the code. Ordered by severity; numbering is kept stable,
 |---|---|---|---|---|
 | 1 | **High** | `fac_std_receiver.c` `FAC_std_receiver_is_connected()` | The round-robin index reached `0` once every 9 calls, because the `if (channelToCheck == 0) channelToCheck++` guard corrected the *previous* value while the check used the *new* one. `FAC_std_receiver_GET_channel(0)` then read `channels[-1]`, and in PWM mode also called `FAC_pwm_receiver_calculate_channel_value(0)` — which reads `channels_t2[-1]`, i.e. `channels_t1[3]`, and on a passing range check writes `receiver.channels[-1]`, `pwmReceiver.channels_t1[-1]` and zeroes CH4's rising-edge timestamp. Garbage in the adjacent word could make the board report "receiver connected" and arm without an RC link. | The index now cycles with `channelToCheck = (channelToCheck % RECEIVER_CHANNELS_NUMBER) + 1`, which can only produce `1 … RECEIVER_CHANNELS_NUMBER`. `FAC_std_receiver_GET_channel()` additionally returns `0` for any `chNumber` outside that range, before touching any backend. |
 | 2 | **High** | `fac_battery.c` `FAC_battery_GET_cell_voltage()` | Returned `battery.voltage` (pack) instead of `single_cell_voltage`, and `FAC_battery_calculate_cell_voltage()` never divided by the cell count — so `single_cell_voltage` was write-only dead state. Low-battery detection compared the pack voltage against a per-cell threshold (clamped to 2800…4000 mV), so on 2S and above **low battery could never trigger**: a 2S at 3.4 V/cell reads 6800 mV, well above a 3400 mV threshold. | `FAC_battery_calculate_cell_voltage()` now divides the pack voltage by the cell count held in `battery.type`, falling back to a divider of 1 when the type is `BATTERY_TYPE_USB` (value 0 — would be a division by zero) or `BATTERY_TYPE_NONE`. The getter returns `battery.single_cell_voltage`. `fac_app.c` renamed its local to `vcell` and now feeds both the low-battery and the cut-off comparisons with it. |
+| 3 | **High** | `LSM6DS3.h` / `fac_imu.h` | `int16_t gyro_offsets[]` was a flexible array member, so it contributed 0 to `sizeof(LSM6DS3)` (28 bytes) and had no storage — yet `LSM6DS3` is embedded **by value** inside `Gyro`. Verified against the committed build: `gyro` sat at `0x200003e0` with `sizeof(Gyro) == 0x20`, `gyro_status` at offset 28, and `.bss.motors` immediately after at `0x20000400`. `LSM6DS3_calculate_offset()` stored `[0]`→bytes 28-29 (**over `gyro_status`**), `[1]`→30-31 (padding), `[2]`→32-33 (**past `gyro`, onto the low half-word of `motors[0]`, the Motor 1 pointer**). Latent only by luck of init ordering: `FAC_IMU_GET_status()` is read before the calibration and `FAC_motor_init()` reassigns `motors[0]` right after it. Also a C99/C11 constraint violation (§6.7.2.1p3) that GCC accepts silently. | The array is now sized: `int16_t gyro_offsets[LSM6DS3_AXIS_NUMBER]`, with the new `LSM6DS3_AXIS_NUMBER` (3) also replacing the hardcoded `3` in the three axis loops. `sizeof(LSM6DS3)` 28 → 36, `sizeof(Gyro)` 32 → 40; 8 bytes of RAM, no signature or protocol change. |
 | 10 | **Low** | `fac_app.c` cut-off check | `BATTERY_TYPE_NONE` has the value 5 and was used directly as a cell-count multiplier (`CUTOFF_VOLTAGE_MV × batteryType`), giving a 14000 mV threshold that can never be reached — so an unrecognised pack forced CUTOFF after the detection time. Safe, but accidental. | The multiplication is gone: the per-cell threshold is now compared against the per-cell voltage, and the three special cases are explicit — threshold `0` (user-disabled) and `BATTERY_TYPE_USB` always reset the timer, `BATTERY_TYPE_NONE` never does, so an unknown pack still ends in CUTOFF but **on purpose**. The enum values themselves are unchanged (the FAC Tool depends on them). |
 
 ---

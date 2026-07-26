@@ -199,9 +199,8 @@ void FAC_app_main_loop() {// one cycle every 13ms [about 76Hz] (with simple tank
 		/* WRITE HERE YOUR CODE */
 #ifdef IM_TESTING_FAC_TOOL
 		HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-#endif
-#ifndef IM_TESTING_FAC_TOOL
-		if (FAC_app_GET_current_state() == FAC_STATE_NORMAL) {
+#else
+		if (FAC_app_GET_current_state() == FAC_STATE_NORMAL && !FAC_app_GET_is_low_battery()) {
 			HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
 		}
 #endif

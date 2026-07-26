@@ -115,6 +115,7 @@
 
 // SETTINGS
 #define TIMEOUT_I2C	100
+#define LSM6DS3_AXIS_NUMBER 3	// the sensor has 3 axis, see the AXIS enum below
 
 // STRUCT
 typedef struct LSM6DS3{
@@ -125,7 +126,7 @@ typedef struct LSM6DS3{
 	float gyro_x;
 	float gyro_y;
 	float gyro_z;
-	int16_t gyro_offsets[];	// x, y, z
+	int16_t gyro_offsets[LSM6DS3_AXIS_NUMBER];	// x, y, z
 }LSM6DS3;
 
 enum AXIS{
