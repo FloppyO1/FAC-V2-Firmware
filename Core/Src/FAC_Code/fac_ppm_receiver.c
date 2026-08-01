@@ -51,9 +51,9 @@ void FAC_ppm_receiver_Callback(uint8_t edge) {
  * @brief		Calculate the correct channel value from 0 to RECEIVER_CHANNEL_RESOLUTION. It will send it to the std_receiver object
  * @visibility	everyweher
  * @retval		the value of the channel
- * @note		TIM2 has a resolution of 0.5us (~35 min of period), not used the FAC_std_receiver_new_channel_value in rage return value
+ * @note		TIM2 has a resolution of 0.5us (~35 min of period)
  */
-void FAC_ppm_receiver_calculate_channels_values() {
+void FAC_ppm_receiver_calculate_channels_values(void) {
 	for (int i = 0; i < PPM_RECEIVER_CHANNELS_NUMBER; i++) {
 		uint16_t value = ppmReceiver.raw_channel[i];
 		if (value <= MAX_TIM2_TEORETICAL_CHANNEL_COUNT + (MAX_TIM2_TEORETICAL_CHANNEL_COUNT / 100) * 10) { // if the count is grater than a 10% the value is ignored it must be something wrong with the time capture
@@ -71,7 +71,7 @@ void FAC_ppm_receiver_calculate_channels_values() {
  * @brief Initialize the ppmReceiver object and starts the tim2
  *
  */
-void FAC_ppm_receiver_init() {
+void FAC_ppm_receiver_init(void) {
 	HAL_TIM_Base_Start(&htim2);
 
 	ppmReceiver.t1 = 0;

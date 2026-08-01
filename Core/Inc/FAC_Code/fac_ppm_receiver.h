@@ -23,8 +23,8 @@ typedef struct Ppm_receiver {
 
 
 void FAC_ppm_receiver_Callback(uint8_t edge);
-void FAC_ppm_receiver_calculate_channels_values();
-void FAC_ppm_receiver_init();
+void FAC_ppm_receiver_calculate_channels_values(void);
+void FAC_ppm_receiver_init(void);
 
 
 #endif /* INC_FAC_CODE_FAC_PPM_RECEIVER_H_ */

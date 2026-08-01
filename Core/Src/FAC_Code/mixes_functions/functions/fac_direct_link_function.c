@@ -47,7 +47,8 @@
 //#include "FAC_Code/fac_fac_imu.h"		// if get_status == HAL_ERROR NOT USE data!!
 
 /* PRIVATE FUNCTIONS AND VARIABLES */
-static const uint8_t first_special_function_id = FAC_SPECIAL_FUNCTION_DIRECT_LINK_TO_CHANNEL_1ST;	// 3) of HOW TO MAKE A SPECIAL FUNCTION		(only to know witch mix is this) in case of multiple usage, use the first ID
+// marker only, it records which ID this file implements (see step 5): unused on purpose
+static const uint8_t __attribute__((unused)) first_special_function_id = FAC_SPECIAL_FUNCTION_DIRECT_LINK_TO_CHANNEL_1ST;	// 3) of HOW TO MAKE A SPECIAL FUNCTION		(only to know witch mix is this) in case of multiple usage, use the first ID
 
 /* WHAT THIS SPECIAL FUNCTION DO */											// 7) of HOW TO MAKE A SPECIAL FUNCTION
 /*
@@ -59,10 +60,10 @@ static const uint8_t first_special_function_id = FAC_SPECIAL_FUNCTION_DIRECT_LIN
  *
  * OUTPUTs DESCRIPTION:
  * !! REMEMBER:
- * 		- All outputs must be in a standard format, values form -1.0f to 1.0f !!
+ * 		- All outputs must be in a standard format, values from FAC_VALUE_MIN to FAC_VALUE_MAX (-1000 to +1000) !!
  * 			write here what each mix's output is (ex: 0) motor left, 1) motor right 2)not used ...)
  * 		- If an output is for a DC motor, a positive number is considered as forward movement, a negative number is considered as backwards movement of the DC motor
- * 		- If an output is for a Servo vomor/esc, -1.0 is considered as 0 and 1.0 is considered as 100% (in degrees for servos 0°-180°)
+ * 		- If an output is for a Servo vomor/esc, -1000 is considered as 0 and +1000 is considered as 100% (in degrees for servos 0°-180°)
  *
  * 	direct link from the input, same value
  *
@@ -71,14 +72,16 @@ static const uint8_t first_special_function_id = FAC_SPECIAL_FUNCTION_DIRECT_LIN
 void FAC_direct_link_function_update(uint8_t sFunctionID) {		// 4) of HOW TO MAKE A SPECIAL FUNCTION
 	// this code must be left as it is, DON'T TOUCH IT!
 	uint8_t functionArrayPosition = sFunctionID;// position for the input and output in the functions array
-	FAC_functions_update_inputs();
-	float input = FAC_functions_GET_input(functionArrayPosition);
-	float output = 0.0f;
+	FAC_functions_update_input(functionArrayPosition);
+	fac_value_t input = FAC_functions_GET_input(functionArrayPosition);
+	fac_value_t output = FAC_VALUE_ZERO;
 	/* INSERT YOUR CODE HERE -START- */						// 9) of HOW TO MAKE A SPECIAL FUNCTION
 	/* REMEMBER
 	 * - input contains the value of the input of this function
 	 * - in the output you have to write the output generate by your function
-	 * 		output value must stay in this range [-1.0, +1.0]
+	 * 		output value must stay in this range [FAC_VALUE_MIN, FAC_VALUE_MAX], that is [-1000, +1000]
+	 * - use the FAC_math_* primitives of fac_math.h, NEVER a float: this mcu has no fpu and every
+	 * 		float operation is a library call of hundreds of clock cycles
 	 */
 	// write here your code
 
@@ -86,10 +89,7 @@ void FAC_direct_link_function_update(uint8_t sFunctionID) {		// 4) of HOW TO MAK
 
 	/* INSERT YOUR CODE HERE -END- */
 	// keep outputs in range
-	if (output > 1.0f)
-		output = 1.0f;
-	if (output < -1.0f)
-		output = -1.0f;
+	output = FAC_math_clamp(output);
 	// update outputs values on mixes struct
 	FAC_functions_SET_output(functionArrayPosition, output);
 }

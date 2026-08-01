@@ -20,6 +20,27 @@
 #include "jingles/fac_jingles.h"
 #include "FAC_Code/fac_imu.h"
 
+#ifdef DEBUG_UTILS
+#include "FAC_Code/fac_debug_utils.h"
+
+#ifdef CRONOMETER_ENTIRE_FAC_APP
+static volatile uint16_t entire_app_execution_time = 0;
+#endif
+
+#ifdef CRONOMETER_FAC_APP
+/* EXECUTION TIMES OF THE MAIN LOOP BLOCKS, IN MICROSECONDS (0 MEANS OVERFLOW, SEE FAC_debug_utils_crono_stop) */
+// they are volatile only to keep the optimizer from removing them: nothing reads them, they are meant
+// to be watched from the debugger while the robot is running
+static volatile uint16_t com_serial_execution_time = 0;	// USB command handling, it does blocking EEPROM writes
+static volatile uint16_t mapper_execution_time = 0;		// mixes + special functions + write to motors and servos
+static volatile uint16_t arming_check_execution_time = 0;// settings read + receiver channel read
+static volatile uint16_t battery_check_execution_time = 0;// adc readings + float math of the cell voltage
+static volatile uint16_t cut_off_check_execution_time = 0;// settings reads + tick comparisons
+static volatile uint16_t status_led_execution_time = 0;	// gpio handling of the status led
+static volatile uint16_t normal_state_execution_time = 0;// sum of the blocks of FAC_STATE_NORMAL measured above
+#endif
+#endif
+
 static FAC_App fac_application;
 uint8_t newComSerialReceived = FALSE;	// turn true when something is received
 
@@ -31,7 +52,7 @@ static void FAC_app_SET_current_state(uint8_t current_state) {
 		fac_application.current_state = current_state;
 }
 
-uint8_t FAC_app_GET_current_state() {
+uint8_t FAC_app_GET_current_state(void) {
 	return fac_application.current_state;
 }
 
@@ -39,7 +60,7 @@ static void FAC_app_SET_is_low_battery(uint8_t is_low_battery) {
 	fac_application.is_low_battery = is_low_battery;
 }
 
-static uint8_t FAC_app_GET_is_low_battery() {
+static uint8_t FAC_app_GET_is_low_battery(void) {
 	return fac_application.is_low_battery;
 }
 
@@ -47,22 +68,33 @@ static void FAC_app_SET_battery_type(uint8_t battery_type) {
 	fac_application.battery_type = battery_type;
 }
 
-uint8_t FAC_app_GET_battery_type() {
+uint8_t FAC_app_GET_battery_type(void) {
 	return fac_application.battery_type;
 }
 /* FUNCTION DEFINITION */
-void FAC_app_main_loop() {// one cycle every 13ms [about 76Hz] (with simple tank mix on and two other direct link function)
+void FAC_app_main_loop(void) {	// one cycle every ~1ms
+#ifdef CRONOMETER_ENTIRE_FAC_APP
+	FAC_debug_utils_crono_start();
+#endif
+
 //	HAL_GPIO_TogglePin(DIGITAL_AUX1_GPIO_Port, DIGITAL_AUX1_Pin);	// used to see the time of execution
-	if (newComSerialReceived) {		//	1us
+	if (newComSerialReceived) {
 		// understand the command received and do what you have to do
+#ifdef CRONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
 		FAC_settings_command_response();
+#ifdef CRONOMETER_FAC_APP
+		// a save command writes the eeprom, 10ms per byte, so here the cronometer overflows and returns 0
+		com_serial_execution_time = FAC_debug_utils_crono_stop();
+#endif
 
 		newComSerialReceived = FALSE;
 	}
 
-	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
+	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 #ifndef IM_TESTING_FAC_TOOL
-	/* MAIN FUNCTIONS OF THE APP - STATES OF OPERATION */	// 13ms
+	/* MAIN FUNCTIONS OF THE APP - STATES OF OPERATION */
 	switch (FAC_app_GET_current_state()) {
 	case FAC_STATE_DISARMED: {
 		/* DISABLE ALL DEVICES (MOTORS AND SERVOS) */
@@ -109,10 +141,19 @@ void FAC_app_main_loop() {// one cycle every 13ms [about 76Hz] (with simple tank
 		break;
 	}
 	case FAC_STATE_NORMAL: {
-		/* UPDATE THE MAPPED MOTORS AND SERVOS */   // 8ms max
+		/* UPDATE THE MAPPED MOTORS AND SERVOS */
+#ifdef CRONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
 		FAC_mapper_apply_to_devices();
+#ifdef CRONOMETER_FAC_APP
+		mapper_execution_time = FAC_debug_utils_crono_stop();
+#endif
 
-		/* CHECK ARMING CHANNEL IF USED */	// 800us max
+		/* CHECK ARMING CHANNEL IF USED */
+#ifdef CRONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
 		uint8_t armingCh = FAC_settings_GET_value(
 				FAC_SETTINGS_CODE_ARMING_CHANNEL);
 		if (armingCh != 0) {
@@ -122,33 +163,60 @@ void FAC_app_main_loop() {// one cycle every 13ms [about 76Hz] (with simple tank
 				FAC_app_SET_current_state(FAC_STATE_DISARMED);
 			}
 		}
+#ifdef CRONOMETER_FAC_APP
+		// the receiver channel is recalculated here only if the mapper did not already ask for it
+		arming_check_execution_time = FAC_debug_utils_crono_stop();
+#endif
 
-		/* LOW BATTERY DETECTOR */		// 200us
-		uint16_t vbat = FAC_battery_GET_cell_voltage();
+		/* LOW BATTERY DETECTOR */
+		/* both thresholds (low battery and cut off) are per cell values, so they are compared against Vcell */
+#ifdef CRONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
+		uint16_t vcell = FAC_battery_GET_cell_voltage();
 		uint8_t batteryType = FAC_app_GET_battery_type();
 
 		if (batteryType != BATTERY_TYPE_NONE
 				&& batteryType != BATTERY_TYPE_USB) {// a known battery must be connected at the startup
-			if (vbat
+			if (vcell
 					< FAC_settings_GET_value(
-							FAC_SETTINGS_CODE_LOW_BATTERY_VOLTAGE_MV))// if the vbat is below the low battery thershold
+							FAC_SETTINGS_CODE_LOW_BATTERY_VOLTAGE_MV))// if the cell voltage is below the low battery thershold
 				FAC_app_SET_is_low_battery(TRUE);
 		}
+#ifdef CRONOMETER_FAC_APP
+		// FAC_battery_GET_cell_voltage averages 5 adc readings with float math on a mcu without fpu,
+		// and it is called on every loop even if the battery cannot change that fast
+		battery_check_execution_time = FAC_debug_utils_crono_stop();
+#endif
 
-		/* CUT OFF DETECTION */		// 8us
+		/* CUT OFF DETECTION */
+#ifdef CRONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
 		static uint32_t timerCutOff = 0;
-		if (vbat
-				> FAC_settings_GET_value(FAC_SETTINGS_CODE_CUTOFF_VOLTAGE_MV)
-						* batteryType) {
-			timerCutOff = HAL_GetTick();// if the vbat is grater than the cutoff threshold the timer will be resetted (battery level is ok)
+		uint16_t cutOffThreshold = FAC_settings_GET_value(
+				FAC_SETTINGS_CODE_CUTOFF_VOLTAGE_MV);
+		if (cutOffThreshold == 0 || batteryType == BATTERY_TYPE_USB) {
+			timerCutOff = HAL_GetTick();// cut off disabled by the user (0mV), or USB powered: there is no pack to protect
+		} else if (batteryType != BATTERY_TYPE_NONE
+				&& vcell > cutOffThreshold) {
+			timerCutOff = HAL_GetTick();// if the cell voltage is grater than the cutoff threshold the timer will be resetted (battery level is ok)
 		}
+		/* an unrecognized pack (BATTERY_TYPE_NONE) never resets the timer: its cell count is unknown
+		 * so the cells cannot be protected, the board is sent to CUTOFF on purpose */
 		if (HAL_GetTick() - timerCutOff
 				> FAC_settings_GET_value(
 						FAC_SETTINGS_CODE_CUTOFF_DETECTION_TIME) * 1000) {
 			FAC_app_SET_current_state(FAC_STATE_CUTOFF);
 		}
+#ifdef CRONOMETER_FAC_APP
+		cut_off_check_execution_time = FAC_debug_utils_crono_stop();
+#endif
 
 		/* STATUS LED */
+#ifdef CRONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
 		static uint32_t timerLowBattery = 0;
 		if (FAC_app_GET_is_low_battery()) {
 			if (HAL_GetTick() - timerLowBattery > LOW_BATTERY_LED_PERIOD / 2) {
@@ -158,6 +226,15 @@ void FAC_app_main_loop() {// one cycle every 13ms [about 76Hz] (with simple tank
 		} else {
 			HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);// if no low battery detected the led will be always on
 		}
+#ifdef CRONOMETER_FAC_APP
+		status_led_execution_time = FAC_debug_utils_crono_stop();
+
+		/* the cronometer has a single counter, so the whole state cannot be measured while its blocks
+		 * are, the total is the sum of the parts (the start/stop overhead is counted in every part) */
+		normal_state_execution_time = mapper_execution_time
+				+ arming_check_execution_time + battery_check_execution_time
+				+ cut_off_check_execution_time + status_led_execution_time;
+#endif
 
 		break;
 	}
@@ -194,23 +271,31 @@ void FAC_app_main_loop() {// one cycle every 13ms [about 76Hz] (with simple tank
 		/* WRITE HERE YOUR CODE */
 #ifdef IM_TESTING_FAC_TOOL
 		HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-#endif
-#ifndef IM_TESTING_FAC_TOOL
-		if (FAC_app_GET_current_state() == FAC_STATE_NORMAL) {
+#else
+		if (FAC_app_GET_current_state() == FAC_STATE_NORMAL
+				&& !FAC_app_GET_is_low_battery()) {
 			HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
 		}
 #endif
 	}
+#ifdef CRONOMETER_ENTIRE_FAC_APP
+	// a save command writes the eeprom, 10ms per byte, so here the cronometer overflows and returns 0
+	entire_app_execution_time = FAC_debug_utils_crono_stop();
+#endif
 }
 
 /*
  * @brief	Initialize all modules and load from eeprom all the settings
  *
  */
-void FAC_app_init() {
-	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
+void FAC_app_init(void) {
+	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 	HAL_Delay(300);
-	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
+	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
+
+#ifdef FUNCTION_CLONOMETER
+	FAC_debug_utils_crono_init();// not under CRONOMETER_FAC_APP, every measurement point needs it
+#endif
 
 	FAC_adc_Init();
 	FAC_battery_init();
@@ -219,17 +304,17 @@ void FAC_app_init() {
 
 	/* INERTIAL MESUREMENT UNIT INIT */
 	for (int i = 0; i < 100; i++) {	// wait for 1000ms (stabilization of the supply voltage)
-		HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
+		HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 		HAL_Delay(10);
 	}
 	FAC_IMU_init();
-	HAL_IWDG_Refresh(&hiwdg);// refresh the watchdog	(500ms) NEXT TWO ARE A BIT LONG TO EXECUTE
+	HAL_IWDG_Refresh(&hiwdg);// refresh the watchdog	(~400ms) NEXT TWO ARE A BIT LONG TO EXECUTE
 	FAC_IMU_init_accelerometer();
 	FAC_IMU_init_gyroscope();
 	if (FAC_IMU_GET_status() != HAL_OK) {
 		for (int i = 0; i < 20; i++) {
 			HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-			HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
+			HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 			HAL_Delay(200);
 		}
 	} else {
@@ -255,7 +340,7 @@ void FAC_app_init() {
  * @note	EEPROM is not initialized
  *
  */
-void FAC_app_init_all_modules() {
+void FAC_app_init_all_modules(void) {
 	FAC_battery_SET_calibration_offset(
 			FAC_settings_GET_value(FAC_SETTINGS_CODE_BATTERY_CALIBRATION));
 	FAC_motor_init();
@@ -270,28 +355,43 @@ void FAC_app_init_all_modules() {
 
 /**
  * @brief 		change the range of a variable from one to another
+ * @note		The intermediate product is calculated on 32 bit. Cortex-M0 has no divider at all,
+ * 				so every division is a library routine, and the 64 bit one is far longer than the
+ * 				32 bit one. All the values handled by the firmware (channel counts, speeds, servo
+ * 				positions) stay well below the limit: the widest product in use is about 4*10^6
+ * @note		x is clamped inside [in_min, in_max], so the result never leaves the output range,
+ * 				the same way map_float already behaved
+ * @IMPORTANT	Keep (x - in_min) * (out_max - out_min) below 2^32 or the result wraps around
  * @retval 		return the value in the new range
  */
 uint32_t map_uint32(uint32_t x, uint32_t in_min, uint32_t in_max,
 		uint32_t out_min, uint32_t out_max) {
+	if (in_max == in_min)
+		return out_min;	// empty input range, there is nothing to divide by
 	if (x > in_max)
 		x = in_max;
-	// Cast to uint64_t to avoid overflow during the calculation
-	return (uint32_t) (((uint64_t) (x - in_min) * (out_max - out_min))
-			/ (in_max - in_min) + out_min);
+	if (x < in_min)
+		x = in_min;	// on unsigned math an x below in_min would underflow (x - in_min) to a huge value
+	return (((x - in_min) * (out_max - out_min)) / (in_max - in_min) + out_min);
 }
 
 /**
  * @brief 		change the range of a variable from one to another
+ * @note		The intermediate product is calculated on 32 bit, see map_uint32 for the reason
+ * @note		x is clamped inside [in_min, in_max], so the result never leaves the output range,
+ * 				the same way map_float already behaved
+ * @IMPORTANT	Keep (x - in_min) * (out_max - out_min) inside the int32_t range or the result overflows
  * @retval 		return the value in the new range
  */
 int32_t map_int32(int32_t x, int32_t in_min, int32_t in_max, int32_t out_min,
 		int32_t out_max) {
+	if (in_max == in_min)
+		return out_min;	// empty input range, there is nothing to divide by
 	if (x > in_max)
 		x = in_max;
-	// Cast to uint64_t to avoid overflow during the calculation
-	return (int32_t) (((int64_t) (x - in_min) * (out_max - out_min))
-			/ (in_max - in_min) + out_min);
+	if (x < in_min)
+		x = in_min;	// keep the result inside [out_min, out_max] instead of extrapolating below it
+	return (((x - in_min) * (out_max - out_min)) / (in_max - in_min) + out_min);
 }
 
 /**

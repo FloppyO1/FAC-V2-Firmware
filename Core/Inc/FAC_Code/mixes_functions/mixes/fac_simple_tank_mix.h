@@ -11,7 +11,7 @@
 #include "stm32f0xx_hal.h"
 
 
-void FAC_simple_tank_mix_update();
+void FAC_simple_tank_mix_update(void);
 
 
 

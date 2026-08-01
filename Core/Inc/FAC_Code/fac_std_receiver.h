@@ -33,7 +33,7 @@ enum EDGE{
 };
 
 uint16_t FAC_std_receiver_GET_channel (uint8_t chNumber);
-uint8_t FAC_std_receiver_new_channel_value(uint8_t chNumber, uint16_t value);
+void FAC_std_receiver_new_channel_value(uint8_t chNumber, uint16_t value);
 void FAC_std_reciever_init(uint8_t type);
 uint8_t FAC_std_receiver_GET_is_connected(void);
 

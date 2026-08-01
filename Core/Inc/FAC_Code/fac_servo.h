@@ -12,7 +12,7 @@
 #include "FAC_Code/config.h"
 
 #define SERVOS_NUMBER 2
-#define MAX_SERVO_VALUE RECEIVER_CHANNEL_RESOLUTION-1
+#define MAX_SERVO_VALUE (RECEIVER_CHANNEL_RESOLUTION-1)	// parentheses needed, it is also used as a divisor
 #define SERVO_RESOLUTION RECEIVER_CHANNEL_RESOLUTION
 
 typedef struct Servo {
@@ -28,11 +28,12 @@ typedef struct Servo {
 uint16_t FAC_servo_GET_position(uint8_t servoNumber);
 uint8_t FAC_servo_GET_is_enable(uint8_t servoNumber);
 uint8_t FAC_servo_GET_is_reversed(uint8_t servoNumber);
+uint16_t FAC_servo_GET_servo_freq(uint8_t servoNumber);
 void FAC_servo_set_position(uint8_t servoNumber, uint16_t position);
 void FAC_servo_enable(uint8_t servoNumber);
 void FAC_servo_disable(uint8_t servoNumber);
 void FAC_servo_is_reversed(uint8_t servoNumber, uint8_t isReversed);
 
-void FAC_servo_init();
+void FAC_servo_init(void);
 
 #endif /* INC_FAC_CODE_FAC_SERVO_H_ */

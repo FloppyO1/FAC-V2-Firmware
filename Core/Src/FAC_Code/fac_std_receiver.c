@@ -25,6 +25,7 @@
 #include "FAC_Code/fac_ppm_receiver.h"
 
 Std_receiver receiver;
+static uint8_t receiverInitialized = FALSE;	// the boot init already ran, see FAC_std_reciever_init
 
 /* STATIC FUNCTION PROTORYPES */
 static uint16_t FAC_std_receiver_SET_channel(uint8_t chNumber, uint16_t value);
@@ -42,11 +43,8 @@ static void FAC_std_receiver_is_connected(void) {
 	if (!receiver.connected) {	// I only check if it is not connected yet
 		uint8_t receiverConnected = FALSE;
 		static uint8_t channelToCheck = 0;
-		if (channelToCheck == 0)
-			channelToCheck++;
-		else
-			channelToCheck = ((channelToCheck + 1)
-					% (RECEIVER_CHANNELS_NUMBER + 1));
+		/* cycle the channel to check inside [1, RECEIVER_CHANNELS_NUMBER], channels are 1 based */
+		channelToCheck = (channelToCheck % RECEIVER_CHANNELS_NUMBER) + 1;
 		if (FAC_std_receiver_GET_channel(channelToCheck) != 0)
 			receiverConnected = TRUE;
 
@@ -140,8 +138,12 @@ uint8_t FAC_std_receiver_GET_is_connected(void) {
 /*
  * @brief calculate the new value of the requested channel
  * @retval return the new channel value if it was correct, otherwise return the old value
+ * @IMPORTANT	chNumber is 1 based, an out of range channel returns 0 without touching any receiver object
  */
 uint16_t FAC_std_receiver_GET_channel(uint8_t chNumber) {
+	if (chNumber < 1 || chNumber > RECEIVER_CHANNELS_NUMBER)
+		return 0;	// out of range: avoid any out of bounds read / write on the channels arrays
+
 	switch (receiver.type) {// calculate channel / channels according to the type of receiver in use
 	case RECEIVER_TYPE_PWM:
 		if (chNumber <= PWM_RECEIVER_CHANNELS_NUMBER)// update the channel only if the channel exist on this rx type (else it returns the channel number stored on std_receiver without update)
@@ -164,25 +166,32 @@ uint16_t FAC_std_receiver_GET_channel(uint8_t chNumber) {
 /**
  * @brief 		Allows the different types of receiver to set the new value of a specific channel
  * @visibility	Everywhere
- * @retval		Return 0 if the new value was inside the range, 1 if it was outside the range so it is resized to max value allowed
+ * @note		The deadzone is applied here, then the value is clamped and stored
  */
-uint8_t FAC_std_receiver_new_channel_value(uint8_t chNumber, uint16_t value) {
+void FAC_std_receiver_new_channel_value(uint8_t chNumber, uint16_t value) {
 	uint16_t valueWithDeadzone = FAC_std_receiver_calculate_dead_zone(value,
 			FAC_settings_GET_value(
 					FAC_SETTINGS_CODE_CHANNELS_DEADZONE_PERCENTAGE), chNumber);
-	uint16_t valueStored = FAC_std_receiver_SET_channel(chNumber,
-			valueWithDeadzone);
-	if (value != valueStored)
-		return 1;// the value stored was not in the range (value stored do not correspond to "value")
-	return 0;
+	FAC_std_receiver_SET_channel(chNumber, valueWithDeadzone);
 }
 
 /**
- * @brief 	Initialize the std_reciever with all channels to zero, and initialize the correct receiver type
+ * @brief 		Initialize the std_reciever with all channels to zero, and initialize the correct receiver type
  * @visibility	Everywhere
- * @note  	It must be used at the firmware start up only
+ * @IMPORTANT	This is DESTRUCTIVE: it throws away the channel values and, through the backend init,
+ * 				the capture timestamps too. A channel of 0 is NOT "no signal", it is the stick at its
+ * 				full negative travel, because FAC_math_from_range maps 0 to -1000. So a mix reading a
+ * 				channel that has just been cleared commands FULL REVERSE, and a special function sends
+ * 				a servo to its end stop, until the backend captures a new frame, which takes up to a
+ * 				whole rc frame (~20ms). That is what made motors and servos jump on every apply from
+ * 				the fac tool, since FAC_app_init_all_modules() re-runs every module init
+ * @note		Re-running it with the type unchanged has nothing to reconfigure: the backend is
+ * 				already the right one and already feeding the channels, so it is left alone
  */
 void FAC_std_reciever_init(uint8_t type) {
+	if (receiverInitialized && type == receiver.type)
+		return;	// same backend already running, tearing it down would only lose the live channels
+
 	for (int i = 0; i < RECEIVER_CHANNELS_NUMBER; i++) {// initialize all the channels value to zero
 		receiver.channels[i] = 0;
 	}
@@ -202,6 +211,7 @@ void FAC_std_reciever_init(uint8_t type) {
 		// INITIALZE THIS TYPE OF RECEIVER..
 		break;
 	}
+	receiverInitialized = TRUE;
 }
 
 /**

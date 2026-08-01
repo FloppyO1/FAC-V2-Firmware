@@ -40,7 +40,8 @@
 //#include "FAC_Code/fac_fac_imu.h"		// if get_status == HAL_ERROR NOT USE data!!
 #include "stdlib.h"
 /* PRIVATE FUNCTIONS AND VARIABLES */
-static const uint8_t mix_id = FAC_MIX_SIMPLE_TANK;// 3) of HOW TO MAKE A MIX		(only to know witch mix is this)
+// marker only, it records which ID this file implements (see step 5): unused on purpose
+static const uint8_t __attribute__((unused)) mix_id = FAC_MIX_SIMPLE_TANK;// 3) of HOW TO MAKE A MIX		(only to know witch mix is this)
 
 /* WHAT THIS MIX DO */								// 7) of HOW TO MAKE A MIX
 /*
@@ -69,10 +70,10 @@ static const uint8_t mix_id = FAC_MIX_SIMPLE_TANK;// 3) of HOW TO MAKE A MIX		(o
  * Use the OUTPUT_<NAME> to know the position of where to put the output value in the outputs array
  *
  * !! REMEMBER:
- * 		- All outputs must be in a standard format, values form -1.0f to 1.0f !!
+ * 		- All outputs must be in a standard format, values from FAC_VALUE_MIN to FAC_VALUE_MAX (-1000 to +1000) !!
  * 			write here what each mix's output is (ex: 0) motor left, 1) motor right 2)not used ...)
  * 		- If an output is for a DC motor, a positive number is considered as forward movement, a negative number is considered as backwards movement of the DC motor
- * 		- If an output is for a Servo vomor/esc, -1.0 is considered as 0 and 1.0 is considered as 100% (in degrees for servos 0°-180°)
+ * 		- If an output is for a Servo vomor/esc, -1000 is considered as 0 and +1000 is considered as 100% (in degrees for servos 0°-180°)
  */
 #define OUTPUT_MOTOR_LEFT 0
 #define OUTPUT_MOTOR_RIGHT 1
@@ -89,13 +90,13 @@ static const uint8_t mix_id = FAC_MIX_SIMPLE_TANK;// 3) of HOW TO MAKE A MIX		(o
  * @brief	Calculate the mix output values
  *
  */
-void FAC_simple_tank_mix_update() {					// 4) of HOW TO MAKE A MIX
+void FAC_simple_tank_mix_update(void) {					// 4) of HOW TO MAKE A MIX
 	// this code must be left as it is, DON'T TOUCH IT!
-	float outputs[MIXES_MAX_OUTPUTS_NUMBER];
-	float inputs[MIXES_MAX_INPUTS_NUMBER];
+	fac_value_t outputs[MIXES_MAX_OUTPUTS_NUMBER];
+	fac_value_t inputs[MIXES_MAX_INPUTS_NUMBER];
 	FAC_mixes_update_mix_inputs();// update the mix input in base of the settings and rx channels
 	for (int i = 0; i < MIXES_MAX_OUTPUTS_NUMBER; i++) {
-		outputs[i] = 0.0f;
+		outputs[i] = FAC_VALUE_ZERO;
 	}
 	for (int i = 0; i < MIXES_MAX_INPUTS_NUMBER; i++) {
 		inputs[i] = FAC_mixes_GET_input(i);
@@ -104,15 +105,27 @@ void FAC_simple_tank_mix_update() {					// 4) of HOW TO MAKE A MIX
 	/* REMEMBER
 	 * - inputs array contains all values of the channel requested for this mix
 	 * - in the outputs array you have to write in the same order you written above all outputs for servos and motors
-	 * 		outputs values must stay in this range [-1.0, +1.0]
+	 * 		outputs values must stay in this range [FAC_VALUE_MIN, FAC_VALUE_MAX], that is [-1000, +1000]
+	 * - use the FAC_math_* primitives of fac_math.h, NEVER a float: this mcu has no fpu and every
+	 * 		float operation is a library call of hundreds of clock cycles
 	 */
 	// write here the code of your mix
-	int16_t inThrottle = (int16_t) (inputs[INPUT_THROTTLE] * 1000);// take in consideration 3 decimal digit (integer math is faster)
-	int16_t inSteering = (int16_t) (inputs[INPUT_STEERING] * 1000);
+	/* WHY THE diff TERM EXISTS - DO NOT REPLACE THIS WITH A PLAIN SATURATED SUM !!
+	 * A transmitter gimbal moves inside a SQUARE gate, not a circular one: throttle and steering
+	 * can both be at their end of travel at the same time, in the corners of the gate.
+	 * A plain "left = throttle + steering" clipped at full scale would behave as if the gate were
+	 * circular, and every corner of the square would saturate to the same value, losing the
+	 * difference between them. The diff term redistributes the leftover travel instead, so the
+	 * corners of the gate stay distinguishable and the robot keeps steering at full throttle. */
+	fac_value_t inThrottle = inputs[INPUT_THROTTLE];	// already normalized, [-1000, +1000]
+	fac_value_t inSteering = inputs[INPUT_STEERING];
 
-	int16_t left = inThrottle + inSteering;
-	int16_t right = inThrottle - inSteering;
-	int16_t diff = (uint16_t) (abs(inThrottle) - abs(inSteering));
+	/* the sums are deliberately NOT saturated here: they are allowed to reach twice the full
+	 * scale, and the /2 below brings them back. Saturating early is what would collapse the
+	 * corners of the square gate, see the note above */
+	int32_t left = inThrottle + inSteering;
+	int32_t right = inThrottle - inSteering;
+	int32_t diff = FAC_math_abs(inThrottle) - FAC_math_abs(inSteering);
 
 	if (left < 0)
 		left = left - abs(diff);
@@ -124,16 +137,13 @@ void FAC_simple_tank_mix_update() {					// 4) of HOW TO MAKE A MIX
 	else
 		right = right + abs(diff);
 
-	outputs[OUTPUT_MOTOR_LEFT] = (float) (left) / (2.0f*1000.0f);	// also /2 because the rage with the mix became two times the max value
-	outputs[OUTPUT_MOTOR_RIGHT] = (float) (right) / (2.0f*1000.0f);
+	outputs[OUTPUT_MOTOR_LEFT] = left / 2;	// /2 because with the mix the range became twice the max value
+	outputs[OUTPUT_MOTOR_RIGHT] = right / 2;
 
 	/* INSERT YOUR CODE HERE -END- */
 	// keep outputs in range
 	for (int i = 0; i < MIXES_MAX_OUTPUTS_NUMBER; i++) {
-		if (outputs[i] > 1.0f)
-			outputs[i] = 1.0f;
-		if (outputs[i] < -1.0f)
-			outputs[i] = -1.0f;
+		outputs[i] = FAC_math_clamp(outputs[i]);
 	}
 	// update outputs values on mixes struct
 	FAC_mixes_update_mix_outputs(outputs);

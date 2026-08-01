@@ -119,11 +119,11 @@ typedef struct Setting {
 } Setting;
 
 void FAC_settings_init(uint8_t bootValue);
-uint8_t FAC_settings_command_response();
+uint8_t FAC_settings_command_response(void);
 uint16_t FAC_settings_GET_value(uint8_t code);
 void FAC_settings_USB_SEND_setting_ranges(uint8_t code);// does not need to be globally visible
 void FAC_settings_USB_SEND_setting_value(uint8_t code);	// does not need to be globally visible
-void FAC_settings_SEND_what_received();	// does not need to be globally visible
+void FAC_settings_SEND_what_received(void);	// does not need to be globally visible
 void FAC_settings_SET_calibration_offset(uint16_t value);
 
 #endif /* INC_FAC_CODE_FAC_SETTINGS_H_ */

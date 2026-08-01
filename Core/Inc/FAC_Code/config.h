@@ -11,19 +11,44 @@
 #ifdef DEBUG
 //#define IM_TESTING_FAC_TOOL			// if this is defined the target use only the mcu and eeprom, used for testing settings and nothing else.
 //#define SERIAL_DEBUG	// activate the serial debug prints
+
+/* DEBUG UTILS */
+// comment and uncomment to activate debug utils functions
+#define DEBUG_UTILS
+#ifdef DEBUG_UTILS
+#define FUNCTION_CLONOMETER
+
+/* CRONOMETER MEASUREMENT POINTS */
+// comment and uncomment to choose which file is measured
+// !! ONLY ONE AT A TIME !! the cronometer has a single TIM6 counter, so a measure started inside
+// another one resets it and both the results are wrong
+#define CRONOMETER_ENTIRE_FAC_APP // the entire main loop of the app
+//#define CRONOMETER_FAC_APP		// blocks of FAC_app_main_loop (the states of the app)
+//#define CRONOMETER_FAC_MAPPER		// blocks of FAC_mapper_apply_to_devices (mix update and devices)
+
+// the sum counts how many are enabled: with && the check would only fire when ALL of them are
+// defined, while the hazard is already there with any TWO of them (defined() is 1 or 0 in a #if)
+#if (defined(CRONOMETER_ENTIRE_FAC_APP) + defined(CRONOMETER_FAC_APP) + defined(CRONOMETER_FAC_MAPPER)) > 1
+#error "Cronometer measures cannot be nested: enable only one CRONOMETER_* at a time"
+#endif
+#endif
 #endif
 
 /* FIRMWARE VERSION */
 // VERSION NOTE (in addition to the previews one):
 // Now the FAC will always boot up and is forced to DISARMED state until a valid signal came from the receiver
 // than the arming channel/setting will decide the state
+// VERSION NOTE 2.0.8:
+// The mix/function/mapper chain no longer uses floats (fac_math.h, integer only, no fpu needed)
+// EEPROM writes now refresh the watchdog, a large save no longer resets the board halfway through
+// Applying settings from the fac tool no longer clears the live receiver channels or glitches the
+// motor/servo outputs, it only reconfigures what actually changed
+// Unmapped motors are now forced to 0 every loop, same as unmapped servos already were
 #define FIRMWARE_VERSION_MAJOR 2	// [MAX 9] 	add one here, if the changes are substantial and not backwards compatible
 #define FIRMWARE_VERSION_MINOR 0	// [MAX 99] add one here, if new backwards compatible features have been added
-#define FIRMWARE_VERSION_PATCH 7	// [MAX 99] add one here, if any issues have been fixed without adding any features
+#define FIRMWARE_VERSION_PATCH 8	// [MAX 99] add one here, if any issues have been fixed without adding any features
 
 #define FIRMWARE_VERSION_TAG  (uint8_t)((FIRMWARE_VERSION_MAJOR * 101U + FIRMWARE_VERSION_MINOR * 7U + FIRMWARE_VERSION_PATCH * 3U) % 255U)
-
-
 
 /* RECEIVER */
 #define RECEIVER_CHANNEL_RESOLUTION 1000	// max 2000, because the timer tick is 0.5us (500ns)

@@ -69,7 +69,7 @@ void FAC_pwm_receiver_Callback(uint8_t edge, uint16_t GPIO_Pin) {
  * @brief		Calculate the correct channel value from 0 to RECEIVER_CHANNEL_RESOLUTION. It will send it to the std_receiver object
  * @visibility	everyweher
  * @retval		the value of the channel
- * @note		TIM2 has a resolution of 0.5us (~35 min of period), not used the FAC_std_receiver_new_channel_value in rage return value
+ * @note		TIM2 has a resolution of 0.5us (~35 min of period)
  */
 void FAC_pwm_receiver_calculate_channel_value(uint8_t chNumber) {
 	uint32_t t1 = pwmReceiver.channels_t1[chNumber - 1];
@@ -97,7 +97,7 @@ void FAC_pwm_receiver_calculate_channel_value(uint8_t chNumber) {
  * @brief Initialize the pwmReceiver object and starts the tim2
  *
  */
-void FAC_pwm_receiver_init() {
+void FAC_pwm_receiver_init(void) {
 	HAL_TIM_Base_Start(&htim2);
 
 	for (int i = 0; i < PWM_RECEIVER_CHANNELS_NUMBER; i++) {

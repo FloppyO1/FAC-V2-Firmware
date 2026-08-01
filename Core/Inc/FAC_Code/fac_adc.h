@@ -19,9 +19,9 @@ typedef struct Adc {
 } Adc;
 
 
-uint16_t FAC_adc_GET_resolution();
-uint32_t FAC_adc_GET_Vref_in_uV();
+uint16_t FAC_adc_GET_resolution(void);
+uint32_t FAC_adc_GET_Vref_in_uV(void);
 uint16_t FAC_adc_get_raw_channel_value(uint8_t chNumber);
-HAL_StatusTypeDef FAC_adc_Init();
+HAL_StatusTypeDef FAC_adc_Init(void);
 
 #endif /* INC_FAC_CODE_FAC_ADC_H_ */

@@ -17,6 +17,7 @@ static Motor motor1;
 static Motor motor2;
 static Motor motor3;
 static Motor *motors[MOTORS_NUMBER];	// array of pointers to all the motors
+static uint8_t motorsInitialized = FALSE;	// the boot init already ran, see FAC_motor_init
 
 /* STATIC FUNCTION PROTORYPES */
 static void FAC_set_pwm_duty(uint16_t pin, uint16_t duty);
@@ -40,7 +41,7 @@ uint16_t FAC_motor_GET_speed(uint8_t motorNumber) {
 	return motors[motorNumber - 1]->speed;
 }
 
-uint16_t FAC_motor_GET_reverse(uint8_t motorNumber) {
+uint8_t FAC_motor_GET_reverse(uint8_t motorNumber) {
 	return motors[motorNumber - 1]->is_reversed;
 }
 
@@ -162,6 +163,14 @@ void FAC_motor_set_speed_direction(uint8_t motorNumber, uint8_t dir, uint16_t sp
 /**
  * @brief 			Set the values of speed of the motor to make some beeping noise (blocking function)
  * @note 			This function block the code execution for duration ms. All DC motor will make noise
+ * @IMPORTANT		The audible tone IS the soft-PWM repetition rate, not the direction toggling below.
+ * 					FAC_DMA_pwm_change_freq(freq) makes the DMA drive the coils with a 5% duty pulse
+ * 					train at freq, and that keeps sounding until the frequency and the speed are
+ * 					restored at the end. The tone is therefore heard during the wait loop, which lasts
+ * 					~duration ms because HAL_Delay(0) still waits for the next SysTick tick
+ * 					(stm32f0xx_hal.c does "wait += uwTickFreq"). By the time the direction loop is
+ * 					reached the budget is spent, so it only runs for the leftover (<= ~1 ms).
+ * 					Do not "optimize away" the wait loop: it is what gives the note its length.
  */
 void FAC_motor_make_noise(uint16_t freq, uint16_t duration) {
 	FAC_DMA_pwm_change_freq(freq);
@@ -170,7 +179,7 @@ void FAC_motor_make_noise(uint16_t freq, uint16_t duration) {
 		FAC_motor_apply_settings(i);
 	}
 	uint32_t timerSound = HAL_GetTick();
-	for (int i = 0; i < duration; i++) {
+	for (int i = 0; i < duration; i++) {	// this is where the tone is actually heard, ~1ms per iteration
 		HAL_IWDG_Refresh(&hiwdg);
 		HAL_Delay(0);
 	}
@@ -198,28 +207,49 @@ void FAC_motor_make_noise(uint16_t freq, uint16_t duration) {
  * @brief 			Initialize all three motor values, and populate the array of pointers. It also initialize the DMA PWM generator
  * @visibility 		Visible everywhere
  * @note			Motors PWM are generated from the DMA
+ * @IMPORTANT		initDMApwm() clears the whole soft pwm buffer, and a cleared entry is a BSRR word
+ * 					of 0, which writes nothing: the six motor pins stay FROZEN at whatever level they
+ * 					held at that instant, a static drive instead of a duty cycle, until something
+ * 					rewrites the buffer. It must therefore run once, at boot. FAC_app_init_all_modules()
+ * 					calls this again on every apply from the fac tool, and there only the frequency
+ * 					has to follow the settings: FAC_DMA_pwm_change_freq() does it by writing the timer
+ * 					reload alone, leaving the running buffer untouched
+ * @note			Speed and direction belong to the mapper, which rewrites them on the next loop
+ * 					pass, so a re-init does not touch them: forcing them here would be the very stop
+ * 					and restart this function exists to avoid
  */
-void FAC_motor_init() {
-	initDMApwm(FAC_settings_GET_value(FAC_SETTINGS_CODE_MOTORS_FREQ));	// initialize the DMA PWM with the correct frequency
-	/* INITIALIZE THE ARRAY OF MOTOR POINTERs */
-	motors[0] = &motor1;
-	motors[1] = &motor2;
-	motors[2] = &motor3;
+void FAC_motor_init(void) {
+	uint16_t freq = FAC_settings_GET_value(FAC_SETTINGS_CODE_MOTORS_FREQ);
+	uint8_t firstInit = !motorsInitialized;
 
-	motors[0]->pinF = M1_F_Pin;
-	motors[0]->pinB = M1_B_Pin;
+	if (firstInit) {
+		initDMApwm(freq);	// initialize the DMA PWM with the correct frequency
+		/* INITIALIZE THE ARRAY OF MOTOR POINTERs */
+		motors[0] = &motor1;
+		motors[1] = &motor2;
+		motors[2] = &motor3;
 
-	motors[1]->pinF = M2_F_Pin;
-	motors[1]->pinB = M2_B_Pin;
+		motors[0]->pinF = M1_F_Pin;
+		motors[0]->pinB = M1_B_Pin;
 
-	motors[2]->pinF = M3_F_Pin;
-	motors[2]->pinB = M3_B_Pin;
+		motors[1]->pinF = M2_F_Pin;
+		motors[1]->pinB = M2_B_Pin;
+
+		motors[2]->pinF = M3_F_Pin;
+		motors[2]->pinB = M3_B_Pin;
+	} else {
+		FAC_DMA_pwm_change_freq(freq);	// only the timer reload, the buffer keeps driving the pins
+	}
 
 	for (int i = 1; i <= MOTORS_NUMBER; i++) {	// for safety reason and apply the settings
 		FAC_motor_SET_reverse(i, FAC_settings_GET_value(FAC_SETTINGS_CODE_M1_REVERSED + (i-1)));
 		FAC_motor_SET_break_en(i, FAC_settings_GET_value(FAC_SETTINGS_CODE_M1_BRAKE_EN + (i-1)));	// motor will brake_en if speed = 0
-		FAC_motor_SET_direction(i, FORWARD);	// motor forward (doesn't care if speed = 0)
-		FAC_motor_SET_speed(i, 0);	// motor not spinning
+		if (firstInit) {
+			FAC_motor_SET_direction(i, FORWARD);	// motor forward (doesn't care if speed = 0)
+			FAC_motor_SET_speed(i, 0);	// motor not spinning
+			FAC_motor_apply_settings(i);// write the safe state into the buffer initDMApwm just cleared
+		}
 	}
 
+	motorsInitialized = TRUE;
 }

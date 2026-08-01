@@ -115,13 +115,20 @@ static Setting settings[FAC_SETTINGS_CODE_LAST] = {	// insert every single setti
 // @formatter:on
 
 /* STATIC FUNCTION PROTORYPES */
-static void FAC_settings_LOAD_ALL_from_eeprom();
-static void FAC_settings_STORE_ALL_to_eeprom();
+static void FAC_settings_LOAD_ALL_from_eeprom(void);
+static void FAC_settings_STORE_ALL_to_eeprom(void);
 static void FAC_settings_SET_value(uint8_t code, uint16_t value);
 
 /* FUNCTION DEFINITION */
 /* ----------------------PRIVATE FUNCTIONS---------------------- */
+/*
+ * @brief	Store a value into the settings array, clamped to the range of that setting
+ * @note	The code can come from the usb command, where it is not validated, so it is checked here
+ */
 static void FAC_settings_SET_value(uint8_t code, uint16_t value) {
+	if (code >= FAC_SETTINGS_CODE_LAST)
+		return;	// unknown setting code: ignore it instead of writing outside the settings array
+
 	uint16_t v = value;
 	/* check if value is inside the range */
 	if (v < settings[code].min_value)
@@ -136,7 +143,7 @@ static void FAC_settings_SET_value(uint8_t code, uint16_t value) {
  * @biref	Load all settings form the eeprom
  * @note	Load directly to settings array
  */
-static void FAC_settings_LOAD_ALL_from_eeprom() {
+static void FAC_settings_LOAD_ALL_from_eeprom(void) {
 	for (int i = 0; i < FAC_SETTINGS_CODE_LAST; i++) {
 		FAC_settings_SET_value(i, FAC_eeprom_read_value(i));
 	}
@@ -146,7 +153,7 @@ static void FAC_settings_LOAD_ALL_from_eeprom() {
  * @biref	Store all settings to the eeprom
  * @note	Store the settings of the settings array
  */
-static void FAC_settings_STORE_ALL_to_eeprom() {
+static void FAC_settings_STORE_ALL_to_eeprom(void) {
 	for (int i = 0; i < FAC_SETTINGS_CODE_LAST; i++) {
 		FAC_eeprom_store_value(i, FAC_settings_GET_value(i));
 	}
@@ -175,11 +182,11 @@ static void FAC_settings_uint16_to_bytes(uint16_t value, uint8_t *array) {
 /**
  * @brief		Convert a uint8 array into the corrisponding uint16_t
  * @retval		Uint16_t converted form the byte array
- * @note		MSB first (big endian)
+ * @note		MSB first (big endian), so it is the exact inverse of FAC_settings_uint16_to_bytes
  * @ATTENCTION	arm use little endian
  */
 static uint16_t FAC_settings_bytes_to_uint16(const uint8_t *array) {
-	return (uint16_t) array[0] | ((uint16_t) array[1] << 8);
+	return ((uint16_t) array[0] << 8) | (uint16_t) array[1];
 }
 
 /*
@@ -194,7 +201,7 @@ static uint16_t FAC_settings_bytes_to_uint16(const uint8_t *array) {
  * 			2B	accel Y	[mg]												23-24
  * 			2B	accel Z	[mg]												25-26
  */
-static void FAC_settings_USB_SEND_telemetry() {
+static void FAC_settings_USB_SEND_telemetry(void) {
 	uint8_t telemetryPacket[27];
 	/* telemetry res code */
 	telemetryPacket[0] = FAC_USB_COMMAND_TELEMETRY_RESPONSE;
@@ -325,7 +332,7 @@ void FAC_settings_SET_calibration_offset(uint16_t value) {
  * @brief	understand the command received via COM serial and give the correct response
  * @retval	TRUE (1) if command understood, else FALSE (0)
  */
-uint8_t FAC_settings_command_response() {
+uint8_t FAC_settings_command_response(void) {
 	uint8_t commandUndestood = FALSE;
 	uint8_t command_code = comSerialBuffer[0];
 	uint8_t setting_code = comSerialBuffer[1];
@@ -341,9 +348,8 @@ uint8_t FAC_settings_command_response() {
 		commandUndestood = TRUE;
 		break;
 	case FAC_USB_COMMAND_WRITE:
-		uint8_t valueRaw[2] = {	// first 3 than 2 because data is sent in big endian (first msB than lsB) arm use little endian
-				comSerialBuffer[3], comSerialBuffer[2] };
-		uint16_t value = FAC_settings_bytes_to_uint16(valueRaw);
+		// the value is sent big endian (msB first), which is the order bytes_to_uint16 reads
+		uint16_t value = FAC_settings_bytes_to_uint16(&comSerialBuffer[2]);
 		FAC_settings_SET_value(setting_code, value);
 
 		CDC_Transmit_FS(&ping, 1);
@@ -384,8 +390,12 @@ uint8_t FAC_settings_command_response() {
 /**
  * @brief	Sends via COM serial the settings value
  * @note	Data format [code, valueLSB, valueMSB]
+ * @note	An unknown code gets no answer at all, the code is not validated by the usb protocol
  */
 void FAC_settings_USB_SEND_setting_value(uint8_t code) {
+	if (code >= FAC_SETTINGS_CODE_LAST)
+		return;	// unknown setting code: do not read outside the settings array
+
 	uint8_t data[4];
 	data[0] = FAC_USB_COMMAND_READ_VALUE;
 	data[1] = code;
@@ -399,8 +409,12 @@ void FAC_settings_USB_SEND_setting_value(uint8_t code) {
 /**
  * @brief	Sends via COM serial the settings value ranges
  * @note	Data format [code, minLSB, minMSB, maxLSB, maxMSB]
+ * @note	An unknown code gets no answer at all, the code is not validated by the usb protocol
  */
 void FAC_settings_USB_SEND_setting_ranges(uint8_t code) {
+	if (code >= FAC_SETTINGS_CODE_LAST)
+		return;	// unknown setting code: do not read outside the settings array
+
 	uint8_t data[6];
 	data[0] = FAC_USB_COMMAND_READ_RANGE;
 	data[1] = code;
@@ -426,7 +440,7 @@ void FAC_settings_init(uint8_t bootValue) {
 		FAC_settings_STORE_ALL_to_eeprom();
 		/* A LOTS OF BLINK TO INDICARTE AN MASSIVE EEPROM WRITE */
 		for (int i = 0; i < 10; i++) {
-			HAL_IWDG_Refresh(&hiwdg);// refresh the watchdog	(500ms) LONG TO MAKE
+			HAL_IWDG_Refresh(&hiwdg);// refresh the watchdog	(~400ms) LONG TO MAKE
 			HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
 			HAL_Delay(50);
 			HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
@@ -440,7 +454,7 @@ void FAC_settings_init(uint8_t bootValue) {
 
 		/* SOME BLINKS TO INDICATE A NORMAL EEPROM READ */
 		for (int i = 0; i < 3; i++) {
-			HAL_IWDG_Refresh(&hiwdg);// refresh the watchdog	(500ms) LONG TO MAKE
+			HAL_IWDG_Refresh(&hiwdg);// refresh the watchdog	(~400ms) LONG TO MAKE
 			HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
 			HAL_Delay(50);
 			HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
@@ -455,6 +469,6 @@ void FAC_settings_init(uint8_t bootValue) {
  * @brief	Sends via USB COM wdatahat the USB serial COM received
  * @note	Send the whole USB serial buffer
  */
-void FAC_settings_SEND_what_received() {
+void FAC_settings_SEND_what_received(void) {
 	CDC_Transmit_FS(comSerialBuffer, sizeof(comSerialBuffer));
 }

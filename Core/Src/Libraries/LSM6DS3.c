@@ -50,7 +50,7 @@ HAL_StatusTypeDef LSM6DS3_init(LSM6DS3 *LSM6DS3object, I2C_HandleTypeDef *hi2c) 
 	}
 	uint8_t settings = 0b01000100;
 	write_register(LSM6DS3object, CTRL3_C, settings);
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < LSM6DS3_AXIS_NUMBER; i++)
 		LSM6DS3object->gyro_offsets[i] = 0;
 	return HAL_OK;	// initialization completed
 }
@@ -74,7 +74,7 @@ HAL_StatusTypeDef LSM6DS3_init_gyro(LSM6DS3 *LSM6DS3object) {
 }
 
 void LSM6DS3_update_accelerometer_all_values(LSM6DS3 *LSM6DS3object) {
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < LSM6DS3_AXIS_NUMBER; i++)
 		LSM6DS3_update_accelerometer_single_value(LSM6DS3object, i);
 }
 
@@ -97,7 +97,7 @@ void LSM6DS3_update_accelerometer_single_value(LSM6DS3 *LSM6DS3object, uint8_t a
 }
 
 void LSM6DS3_update_gyroscope_all_values(LSM6DS3 *LSM6DS3object) {
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < LSM6DS3_AXIS_NUMBER; i++)
 		LSM6DS3_update_gyroscope_single_value(LSM6DS3object, i);
 }
 void LSM6DS3_update_gyroscope_single_value(LSM6DS3 *LSM6DS3object, uint8_t axis) {

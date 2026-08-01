@@ -28,7 +28,7 @@ static void FAC_functions_SET_input_channels(uint8_t functionNumber, uint8_t inp
 	sFunctions.special_functions_input_channels[functionNumber] = inputChannel;
 }
 
-static void FAC_functions_SET_input(uint8_t functionNumber, float inputValue) {
+static void FAC_functions_SET_input(uint8_t functionNumber, fac_value_t inputValue) {
 	sFunctions.special_functions_inputs[functionNumber] = inputValue;
 }
 
@@ -38,24 +38,68 @@ static uint8_t FAC_functions_GET_input_channel_number(uint8_t functionNumber) {
 
 /* ----------------------PUBBLIC FUNCTIONS---------------------- */
 
-float FAC_functions_GET_output(uint8_t functionNumber) {
+/*
+ * @brief	Get the output of one of the special functions
+ * @note	functionNumber is 0 based, an out of range index returns FAC_VALUE_ZERO. The mapper link value
+ * 			(200+i) is only range checked against the settings table, so an invalid index can reach here
+ */
+fac_value_t FAC_functions_GET_output(uint8_t functionNumber) {
+	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
+		return FAC_VALUE_ZERO;
 	return sFunctions.special_functions_outouts[functionNumber];
 }
 
-float FAC_functions_GET_input(uint8_t functionNumber) {
+fac_value_t FAC_functions_GET_input(uint8_t functionNumber) {
+	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
+		return FAC_VALUE_ZERO;
 	return sFunctions.special_functions_inputs[functionNumber];
 }
 
-void FAC_functions_SET_output(uint8_t functionNumber, float outputValue) {
+void FAC_functions_SET_output(uint8_t functionNumber, fac_value_t outputValue) {
+	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
+		return;
 	sFunctions.special_functions_outouts[functionNumber] = outputValue;
 }
 
 /*
+ * @brief		Take the input value of a single special function and calculate its normalized value
+ * @IMPORTANT	!!!! MUST BE CALLED BEFORE READING THE INPUT OF THAT FUNCTION !!!!
+ * @note		A special function has exactly one input, so only its own slot has to be refreshed.
+ * 				Refreshing all of them was the very same work repeated for every linked function
+ * @note		functionNumber is 0 based, an out of range index is ignored, and a disabled slot
+ * 				(input channel 0) is reset to FAC_VALUE_ZERO to not leave a stale value behind
+ */
+void FAC_functions_update_input(uint8_t functionNumber) {
+	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
+		return;
+
+	uint8_t chNumber = FAC_functions_GET_input_channel_number(functionNumber);// get channel number corresponding to the input evaluated
+
+	if (chNumber != 0) {	// if this channel is valid
+		uint16_t rxValue = FAC_std_receiver_GET_channel(chNumber);
+		/* bring the channel into the normalized scale of fac_math.h: with both resolutions
+		 * equal to 1000 this resolves to the exact 2*rx - 1000, and no float is involved */
+		fac_value_t inputValue = FAC_math_from_range(rxValue, 0,
+		RECEIVER_CHANNEL_RESOLUTION);
+
+		FAC_functions_SET_input(functionNumber, inputValue);// store the value into the struct array (where all mixes will take them)
+	} else {
+		FAC_functions_SET_input(functionNumber, FAC_VALUE_ZERO);// disabled slot, do not leave a stale value behind
+	}
+}
+
+/*
  * @brief		Take all the input value and calculate the normalized value
- * @IMPORTANT	!!!! MUST BE CALLED AFTER EACH CALL OF THE FUCTIONS UPDATE !!!!
+ * @IMPORTANT	!! NOT USED BY THE FIRMWARE, IT HAS NO CALLER !!
+ * 				A special function has exactly one input, so its boilerplate calls
+ * 				FAC_functions_update_input() with its own slot. Refreshing all the slots on every
+ * 				function was the same work repeated once per linked function, which is why it was
+ * 				dropped from the boilerplate
+ * @note		Kept available on purpose, for a future function that has to read more than its own
+ * 				slot: in that case call this one before reading the inputs of the other slots
  * @note		take in input the settings input array from settings
  */
-void FAC_functions_update_inputs() {
+void FAC_functions_update_inputs(void) {
 //	for (int i = 0; i < SPECIAL_FUNCITONS_NUMBER; i++) {
 //		uint8_t chNumber = FAC_functions_GET_input_channel_number(i);	// get channel number corresponding to the input evaluated
 //
@@ -68,16 +112,7 @@ void FAC_functions_update_inputs() {
 //		}
 //	}
 	for (int i = 0; i < SPECIAL_FUNCITONS_NUMBER; i++) {
-		uint8_t chNumber = FAC_functions_GET_input_channel_number(i);	// get channel number corresponding to the input evaluated
-
-		if (chNumber != 0) {	// if this channel is valid
-			uint16_t receiverResolution = RECEIVER_CHANNEL_RESOLUTION;
-			uint16_t rxValue = FAC_std_receiver_GET_channel(chNumber);
-			float chValue = (float) (rxValue) / (float) (receiverResolution);	// get the receiver channel value
-			float inputValue = map_float(chValue, 0.0f, 1.0f, -1.0f, 1.0f); // map the channel value to make it standard [-1.0 to 1.0]
-
-			FAC_functions_SET_input(i, inputValue);	// store the value into the struct array (where all mixes will take them)
-		}
+		FAC_functions_update_input(i);
 	}
 }
 
@@ -110,11 +145,11 @@ void FAC_functions_update(uint8_t sFunctionID) {
  * @IMPORTANT	!! BEFORE CALLING THIS FUNCTION MAKE SECURE TO LOAD SETTINGS FROM EEPROM !!
  * @note		initialized to zero (all disabled all mix input and output)
  */
-void FAC_functions_init() {
+void FAC_functions_init(void) {
 	for (int i = 0; i < SPECIAL_FUNCITONS_NUMBER; i++) {	// set all input channels to zero (no input selected)
 		FAC_functions_SET_input_channels(i, FAC_settings_GET_value(FAC_SETTINGS_CODE_SPECIAL_FUNCTION1_INPUT_CHANNEL + i));
-		FAC_functions_SET_input(i, 0.0f);
-		FAC_functions_SET_output(i, 0.0f);
+		FAC_functions_SET_input(i, FAC_VALUE_ZERO);
+		FAC_functions_SET_output(i, FAC_VALUE_ZERO);
 	}
 }
 
