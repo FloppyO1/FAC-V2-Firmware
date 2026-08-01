@@ -22,10 +22,11 @@
 // comment and uncomment to choose which file is measured
 // !! ONLY ONE AT A TIME !! the cronometer has a single TIM6 counter, so a measure started inside
 // another one resets it and both the results are wrong
-#define CLONOMETER_FAC_APP		// blocks of FAC_app_main_loop (the states of the app)
-//#define CLONOMETER_FAC_MAPPER		// blocks of FAC_mapper_apply_to_devices (mix update and devices)
+#define CRONOMETER_ENTIRE_FAC_APP // the entire main loop of the app
+//#define CRONOMETER_FAC_APP		// blocks of FAC_app_main_loop (the states of the app)
+//#define CRONOMETER_FAC_MAPPER		// blocks of FAC_mapper_apply_to_devices (mix update and devices)
 
-#if defined(CLONOMETER_FAC_APP) && defined(CLONOMETER_FAC_MAPPER)
+#if defined(CRONOMETER_FAC_APP) && defined(CRONOMETER_FAC_MAPPER) && defined(CRONOMETER_ENTIRE_FAC_APP)
 #error "Cronometer measures cannot be nested: enable only one CLONOMETER_* at a time"
 #endif
 #endif
@@ -40,8 +41,6 @@
 #define FIRMWARE_VERSION_PATCH 7	// [MAX 99] add one here, if any issues have been fixed without adding any features
 
 #define FIRMWARE_VERSION_TAG  (uint8_t)((FIRMWARE_VERSION_MAJOR * 101U + FIRMWARE_VERSION_MINOR * 7U + FIRMWARE_VERSION_PATCH * 3U) % 255U)
-
-
 
 /* RECEIVER */
 #define RECEIVER_CHANNEL_RESOLUTION 1000	// max 2000, because the timer tick is 0.5us (500ns)

@@ -108,6 +108,13 @@ void FAC_simple_tank_mix_update(void) {					// 4) of HOW TO MAKE A MIX
 	 * 		outputs values must stay in this range [-1.0, +1.0]
 	 */
 	// write here the code of your mix
+	/* WHY THE diff TERM EXISTS - DO NOT REPLACE THIS WITH A PLAIN SATURATED SUM !!
+	 * A transmitter gimbal moves inside a SQUARE gate, not a circular one: throttle and steering
+	 * can both be at their end of travel at the same time, in the corners of the gate.
+	 * A plain "left = throttle + steering" clipped at full scale would behave as if the gate were
+	 * circular, and every corner of the square would saturate to the same value, losing the
+	 * difference between them. The diff term redistributes the leftover travel instead, so the
+	 * corners of the gate stay distinguishable and the robot keeps steering at full throttle. */
 	int16_t inThrottle = (int16_t) (inputs[INPUT_THROTTLE] * 1000);// take in consideration 3 decimal digit (integer math is faster)
 	int16_t inSteering = (int16_t) (inputs[INPUT_STEERING] * 1000);
 

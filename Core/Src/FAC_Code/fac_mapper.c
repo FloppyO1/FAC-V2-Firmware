@@ -36,7 +36,7 @@
 #ifdef DEBUG_UTILS
 #include "FAC_Code/fac_debug_utils.h"
 
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 /* EXECUTION TIMES OF THE MAPPER BLOCKS, IN MICROSECONDS (0 MEANS OVERFLOW, SEE FAC_debug_utils_crono_stop) */
 // they are volatile only to keep the optimizer from removing them: nothing reads them, they are meant
 // to be watched from the debugger while the robot is running
@@ -118,7 +118,7 @@ void FAC_mapper_apply_to_devices(void) {
 	 *	-	100+i where 100 is the prefix indicating that is a mix output, and 'i' is the output number of the mix (0 to max mix output)
 	 *	-	200+i where 200 is the prefix indicating that is a special function output, and 'i' indicates the output number (0 to max functions number)
 	 */
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 	/* the measures are accumulated on locals and published on the volatiles only at the end of the
 	 * function: this way the debugger never reads a variable while it is being cleared or summed */
 	uint16_t tLinks = 0, tMix = 0, tFunctions = 0, tCalls = 0;
@@ -138,7 +138,7 @@ void FAC_mapper_apply_to_devices(void) {
 		s1_link,
 		s2_link };
 
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 	tLinks = FAC_debug_utils_crono_stop();
 #endif
 
@@ -151,11 +151,11 @@ void FAC_mapper_apply_to_devices(void) {
 	/* UPDATE ALL OUTPUTS OF THE MIX AND ACTIVE SPECIAL FUNCTIONS */
 	for (int i = 0; i < sizeof(links) / sizeof(links[0]); i++) {	// check and update the active functions/mix
 		if (links[i] / 100 == 1 && !mixUpdated) {	// if the device is linked to the mix and it is not already been calculated
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 			FAC_debug_utils_crono_start();
 #endif
 			FAC_mix_update();	// update the outputs values of the mix/* DC MOTOR 1*/
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 			tMix = FAC_debug_utils_crono_stop();
 #endif
 			mixUpdated = TRUE;	// to not calculate it again
@@ -165,7 +165,7 @@ void FAC_mapper_apply_to_devices(void) {
 			uint8_t linkedFunctionNumber = links[i]%200;
 			if (linkedFunctionNumber < SPECIAL_FUNCITONS_NUMBER) {	// the settings range cannot exclude the invalid link values, so check here
 				if(!functionsUpdated[linkedFunctionNumber])
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 				{
 					FAC_debug_utils_crono_start();
 					FAC_functions_update(linkedFunctionNumber);
@@ -184,36 +184,36 @@ void FAC_mapper_apply_to_devices(void) {
 	/* TRANSFER THE OUTPUTS TO THE CORRECT DEVICES */
 	/* DC MOTOR 1 */
 	if (m1_link) {	// ( mN_link == 0 -> not used) if used apply settings to it
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 		FAC_debug_utils_crono_start();
 #endif
 		FAC_mapper_apply_to_DCmotor(1, m1_link);
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 		tM1 = FAC_debug_utils_crono_stop();
 #endif
 	}
 	/* DC MOTOR 2 */
 	if (m2_link) {	// ( mN_link == 0 -> not used) if used apply settings to it
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 		FAC_debug_utils_crono_start();
 #endif
 		FAC_mapper_apply_to_DCmotor(2, m2_link);
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 		tM2 = FAC_debug_utils_crono_stop();
 #endif
 	}
 	/* DC MOTOR 3 */
 	if (m3_link) {	// ( mN_link == 0 -> not used) if used apply settings to it
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 		FAC_debug_utils_crono_start();
 #endif
 		FAC_mapper_apply_to_DCmotor(3, m3_link);
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 		tM3 = FAC_debug_utils_crono_stop();
 #endif
 	}
 	/* SERVO 1 */
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 	FAC_debug_utils_crono_start();
 #endif
 	if (s1_link) {	// ( sN_link == 0 -> not used) if used apply settings to it
@@ -221,11 +221,11 @@ void FAC_mapper_apply_to_devices(void) {
 		FAC_mapper_apply_to_servo(1, s1_link);
 	} else
 		FAC_servo_disable(1);
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 	tS1 = FAC_debug_utils_crono_stop();
 #endif
 	/* SERVO 2 */
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 	FAC_debug_utils_crono_start();
 #endif
 	if (s2_link) {	// ( sN_link == 0 -> not used) if used apply settings to it
@@ -233,7 +233,7 @@ void FAC_mapper_apply_to_devices(void) {
 		FAC_mapper_apply_to_servo(2, s2_link);
 	} else
 		FAC_servo_disable(2);
-#ifdef CLONOMETER_FAC_MAPPER
+#ifdef CRONOMETER_FAC_MAPPER
 	tS2 = FAC_debug_utils_crono_stop();
 
 	/* PUBLISH THE MEASURES */

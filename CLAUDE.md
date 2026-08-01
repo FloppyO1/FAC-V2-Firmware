@@ -106,9 +106,32 @@ Both have a **9-step numbered recipe in the file header comments** — follow th
 
 In both cases the touch points are: the ID enum (`FAC_MIXES_ID` / `FAC_SPECIAL_FUNCTIONS_ID`), a `case` in the dispatcher (`FAC_mix_update()` / `FAC_functions_update()`), the `#include` in `fac_mixes.c` / `fac_functions.c`, and — for mixes — the `max` of `FAC_SETTINGS_CODE_ACTIVE_MIX` follows `FAC_MIX_LAST-1` automatically. The `/* INSERT YOUR CODE HERE */` region is the only part of the generated body to modify; the boilerplate around it (input fetch, output clamping, write-back) must stay.
 
+**Do not "simplify" the `diff` term in `fac_simple_tank_mix.c` into a plain saturated sum.** A transmitter gimbal moves in a *square* gate, so throttle and steering can both be at full travel at once. A clipped sum would behave as if the gate were circular and collapse every corner of the square to the same output; the `diff` term redistributes the leftover travel so the corners stay distinguishable and the robot still steers at full throttle. The rationale is repeated in the source, at the point where it is tempting to delete.
+
 Step 3's `mix_id` / `first_special_function_id` is a **documentation marker only** — it records which enum ID the file implements, and step 5's `case` label uses the enum name directly (a `static const` from another translation unit is neither visible nor a valid `case` label). It is therefore deliberately never read, and carries `__attribute__((unused))` so `-Wall` stays quiet; keep the attribute when copying the template.
 
 `*.old` files are the superseded pre-refactor mix implementations, kept for reference; the dead code at the bottom of `fac_mixes.c` is likewise historical.
+
+### Math primitives (`fac_math.h`)
+
+`Core/Inc/FAC_Code/mixes_functions/fac_math.h` is the integer math a mix or special function is meant to be built out of — **no floats**. It is header-only (`static inline`), so adding it needed no makefile regeneration. Three groups: normalized values on `[-1000, +1000]` that saturate, raw fixed point on the full `int32_t` that does not (for gyro/accel processing, where saturating at 1000 would throw the signal away), and binary angles with `sin`/`cos`/`atan2`.
+
+Two things about it that are load-bearing:
+
+- **The `±1000` scale is not arbitrary** — it equals `RECEIVER_CHANNEL_RESOLUTION`, `MOTOR_SPEED_RESOLUTION` and `SERVO_POSITION_RESOLUTION`, so the conversions at both ends of the chain are exact and nothing is rounded away.
+- **Division is the expensive operation.** M0 has no divider *and* no long multiply, so the compiler cannot turn `/1000` into a multiply-and-shift — even a constant divisor becomes an `__aeabi_idiv` call. The per-primitive division count is documented in the file header; `clamp`/`abs`/`add`/`sub`/`min`/`max` cost none.
+
+Accuracy of the table-free trig, measured against the real functions over the whole turn: `sin`/`cos` within 2 units out of 1000 and exact at the quadrant points, `atan2` within 0.18°.
+
+**State**: the header exists and is verified, but the mix/function chain still carries `float` at its boundaries (see Conventions below) — converting it to this scale is the current work.
+
+### Planned: graphical mix/function editor
+
+The idea is a browser tool, in the spirit of the parent repo's `TOOLS/FAC_jingle_composer.html`, where a mix or special function is assembled **graphically from blocks**, simulated on the PC against synthetic stick input, and then exported as the `.c`/`.h` pair ready to drop into `mixes_functions/`.
+
+What makes it feasible is exactly the `fac_math.h` step above: **a mix has to be a composition of a closed set of known integer primitives, not arbitrary C.** Arbitrary C cannot be simulated in a browser. Thirteen known integer operations can — and being integer, the browser and the MCU produce *bit-identical* results, which floats would never have given. The exactness rules a simulator must mirror (notably: integer division truncates toward zero, so `Math.trunc` and never `Math.floor`) are written at the top of `fac_math.h`.
+
+The open problem is **registration, not generation**. Emitting the two files is the easy part; a new mix also needs edits in three *other* files (the ID enum, the dispatcher `case`, the `#include`), which a file generator cannot perform by dropping files in. Either the tool emits those edits as a patch, or the dispatch becomes table-driven so that adding a mix is adding one table row — the second is the cleaner target and is worth keeping in mind when touching `fac_mixes.c` / `fac_functions.c`.
 
 ## Conventions
 
