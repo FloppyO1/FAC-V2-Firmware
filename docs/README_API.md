@@ -34,7 +34,7 @@ The code is organised in layers, each in its own module under `Core/Src/FAC_Code
 |---|---|---|
 | Application | `fac_app` | Boot, state machine, super-loop |
 | Configuration | `fac_settings`, `fac_eeprom` | Setting table, persistence, USB command handling |
-| Processing | `fac_mixes`, `fac_functions`, `fac_mapper` | Transform channels into device outputs |
+| Processing | `fac_mixes`, `fac_functions`, `fac_mapper`, `fac_math` (header-only) | Transform channels into device outputs, using only integer primitives — no floats |
 | Device drivers | `fac_motors`, `fac_servo` | Apply outputs to hardware |
 | Input | `fac_std_receiver`, `fac_pwm_receiver`, `fac_ppm_receiver` | Decode the RC link |
 | Sensors | `fac_adc`, `fac_battery`, `fac_imu` | Voltage and motion sensing |
@@ -72,7 +72,7 @@ The code is organised in layers, each in its own module under `Core/Src/FAC_Code
 | CH1 / CH2 / CH3 | PB5 / PB4 / PB3 | CH4 | PA15 |
 | NRF24L01_CE | PA8 | | |
 
-> All six motor pins are on **port A** by necessity: the soft-PWM engine DMAs into `GPIOA->BSRR` only (see [`DMApwm`](#87-librariesdmapwm--soft-pwm-engine)).
+> All six motor pins are on **port A** by necessity: the soft-PWM engine DMAs into `GPIOA->BSRR` only (see [`DMApwm`](#815-librariesdmapwm--soft-pwm-engine)).
 
 ---
 
@@ -85,7 +85,7 @@ The code is organised in layers, each in its own module under `Core/Src/FAC_Code
 3. `FAC_battery_init()` — reset the battery struct, set the hardware divider ratio (7692, i.e. 7.692:1).
 4. `FAC_settings_init(FIRMWARE_VERSION_TAG)` — the key step: compares a marker byte in EEPROM against the firmware version tag. If they differ (first boot ever, or a firmware version bump), the **default** settings are written to EEPROM and the LED blinks **10 times fast**; otherwise the stored settings are loaded and the LED blinks **3 times**. Watching the boot blink tells you which happened.
 5. **~1000 ms delay**, then IMU init (`FAC_IMU_init`, accelerometer, gyroscope). On failure the LED blinks **20 times** and the firmware continues without IMU data; on success the gyro offsets are computed.
-6. `FAC_app_init_all_modules()` — initialises every setting-dependent module (battery calibration, motors, receiver, servos, mixes, special functions). **This same function is re-run when the FAC Tool sends the *apply settings* command**, which is how configuration changes take effect without a reboot.
+6. `FAC_app_init_all_modules()` — initialises every setting-dependent module (battery calibration, motors, receiver, servos, mixes, special functions). **This same function is re-run when the FAC Tool sends the *apply settings* command**, which is how configuration changes take effect without a reboot — see [§6.4](#64-applying-settings-without-disturbing-a-live-robot) for what that re-run is and is not allowed to touch.
 7. State is forced to `FAC_STATE_DISARMED`, the battery type (cell count) is detected once, and a startup jingle plays.
 
 ---
@@ -203,7 +203,7 @@ Both produce **normalised integers in `[-1000, +1000]`** (`fac_value_t`, defined
 
 The scale is not arbitrary: it equals `RECEIVER_CHANNEL_RESOLUTION`, `MOTOR_SPEED_RESOLUTION` and `SERVO_POSITION_RESOLUTION`, so both ends of the chain convert exactly. There are **no floats left in this chain** — M0 has no FPU, and every float operation was a library call.
 
-The only implemented mix is **simple tank** (differential steering): it takes throttle and steering, computes `left = throttle + steering`, `right = throttle - steering`, adds a correction term so the range is preserved, and scales back into `[-1, +1]`. The only implemented special function is **direct link**, which passes its input straight through — used to drive a servo or motor directly from a stick.
+The only implemented mix is **simple tank** (differential steering): it takes throttle and steering, computes `left = throttle + steering`, `right = throttle - steering`, adds a correction term (the `diff` term — see [§10](#10-extending-the-firmware), do not "simplify" it away) so the range is preserved, and scales back into `[-1000, +1000]` at no division cost at all. The only implemented special function is **direct link**, which passes its input straight through — used to drive a servo or motor directly from a stick.
 
 ### 5.4 The mapper and link values
 
@@ -260,6 +260,24 @@ When the tag in EEPROM does not match the running firmware, the settings are con
 
 USB reception happens in interrupt context but does almost nothing: `CDC_Receive_FS()` copies the packet into `comSerialBuffer` and raises the `newComSerialReceived` flag. The main loop then calls `FAC_settings_command_response()`, which does the actual work — important, because command handlers perform blocking I²C EEPROM access.
 
+### 6.4 Applying settings without disturbing a live robot
+
+`APPLY_SETTINGS` (command 07) calls `FAC_app_init_all_modules()` on whatever state the robot is currently in — possibly armed, possibly with motors spinning and servos holding a position. That function was originally written as a boot-time init reused verbatim, and three things in it turned out to glitch a live output hard enough to kick the robot and brown out the supply (issue #19):
+
+| Module | What used to happen on every apply | Why it glitched the output |
+|---|---|---|
+| `fac_std_receiver` | `FAC_std_reciever_init()` cleared `receiver.channels[]` and the backend's capture timestamps | A channel of `0` is not "no signal" — `FAC_math_from_range(0, 0, 1000)` is `-1000`, full negative travel — so for up to one RC frame (~20 ms) every mix/function read full reverse |
+| `fac_motors` (`DMApwm`) | `initDMApwm()` called `zeroSoftPWM()`, wiping the soft-PWM buffer | A cleared buffer entry is a BSRR word of `0`, which writes nothing: the six motor pins **freeze** at whichever level they held at that instant instead of resuming a duty cycle |
+| `fac_servo` | `FAC_servo_apply_new_freq()` went through `HAL_TIM_Base_Init()` | `TIM_Base_SetConfig()` ends with `EGR = TIM_EGR_UG`, an immediate update event that restarts TIM3's counter mid-pulse — the servo sees a truncated or double-length pulse |
+
+Each of the three modules now keeps a `static uint8_t <module>Initialized` flag and splits its `init()` into a boot-only part (claiming the peripheral, the safety disables, clearing the soft-PWM buffer) and a re-init part that only touches what the changed setting actually requires:
+
+- `FAC_std_reciever_init()` returns immediately if the receiver `type` has not changed — the backend is already the right one and already feeding live channels.
+- `FAC_motor_init()` only calls `initDMApwm()` (which clears the buffer) on the very first call; a later frequency change goes through `FAC_DMA_pwm_change_freq()` alone, which just rewrites the timer reload.
+- `FAC_servo_init()` only calls `FAC_servo_apply_new_freq()` when the frequency setting actually changed, and the two safety `FAC_servo_disable()` calls only run at boot.
+
+None of the three re-applies speed, direction, servo-enable or servo-position — those stay the mapper's job, and it rewrites them on the very next loop pass (~1 ms later) regardless.
+
 ---
 
 ## 7. Timing and the watchdog
@@ -294,7 +312,7 @@ float    map_float (float    x, float    in_min, float    in_max, float    out_m
 | Function | Description |
 |---|---|
 | `FAC_app_init` | Full boot sequence (§3). Call once from `main()` after the CubeMX peripheral init. |
-| `FAC_app_init_all_modules` | Re-initialises every setting-dependent module: battery calibration, motors, receiver, servos, mixes, special functions. **Does not touch the EEPROM.** Call after changing settings to apply them live. |
+| `FAC_app_init_all_modules` | Re-initialises every setting-dependent module: battery calibration, motors, receiver, servos, mixes, special functions. **Does not touch the EEPROM.** Call after changing settings to apply them live. Safe to call on an armed robot — each of the motor/servo/receiver modules now guards its destructive boot-only work behind a `static ...Initialized` flag, see [§6.4](#64-applying-settings-without-disturbing-a-live-robot). |
 | `FAC_app_main_loop` | One iteration of the state machine. Call repeatedly and forever. |
 | `FAC_app_GET_current_state` | Current state, one of `FAC_STATE_DISARMED` / `FAC_STATE_NORMAL` / `FAC_STATE_CUTOFF`. |
 | `FAC_app_GET_battery_type` | Cell count detected **once at boot**: `BATTERY_TYPE_USB`(0), `_1S`(1) … `_4S`(4), `_NONE`(5). |
@@ -349,7 +367,7 @@ void     FAC_eeprom_WRITE_frist_boot_value_in_eeprom(void);
 | Function | Description |
 |---|---|
 | `FAC_eeprom_init` | Stores the expected marker value in RAM. `0xFF` is remapped to `0xFE` because `0xFF` is the erased-EEPROM value and could not be distinguished. Does **not** touch the bus. |
-| `FAC_eeprom_store_value` | Writes a 16-bit value at byte address `position*2`. **Reads first and skips the write if unchanged.** Blocking: ~10 ms per byte. |
+| `FAC_eeprom_store_value` | Writes a 16-bit value at byte address `position*2`. **Reads first and skips the write if unchanged.** Blocking: ~10 ms per byte, and refreshes the IWDG on every byte written — see [§7](#7-timing-and-the-watchdog) and issue #20. |
 | `FAC_eeprom_read_value` | Reads the 16-bit value at `position*2`. |
 | `FAC_eeprom_is_first_time` | `TRUE` when the marker byte in EEPROM differs from the expected value — i.e. settings must be reset to defaults. |
 | `FAC_eeprom_GET_is_first_boot_value` | The expected marker currently held in RAM. |
@@ -368,7 +386,7 @@ uint8_t  FAC_std_receiver_GET_is_connected(void);
 
 | Function | Description |
 |---|---|
-| `FAC_std_reciever_init` | Clears all channels and initialises the backend for `type` (`RECEIVER_TYPE_PWM` / `_PPM` / `_NRF24` / `_ELRS`). The last two are placeholders. *(Note the misspelling in the public name.)* |
+| `FAC_std_reciever_init` | Clears all channels and initialises the backend for `type` (`RECEIVER_TYPE_PWM` / `_PPM` / `_NRF24` / `_ELRS`). The last two are placeholders. *(Note the misspelling in the public name.)* **Returns immediately, without touching anything, if `type` is unchanged and the receiver was already initialised** — re-running the clear on a live receiver would drop its channels to `0`, which decodes as full negative travel, not "no signal" (issue #19). |
 | `FAC_std_receiver_GET_channel` | Value of channel `chNumber` (**1-based**), `0 … RECEIVER_CHANNEL_RESOLUTION-1`. Triggers a recalculation from the active backend. Channels beyond the backend's capability return the last stored value; a `chNumber` outside `1 … RECEIVER_CHANNELS_NUMBER` returns `0` without touching any backend. |
 | `FAC_std_receiver_new_channel_value` | Backend → abstraction entry point: applies the deadzone, clamps, and stores. |
 | `FAC_std_receiver_GET_is_connected` | `TRUE` once any channel has read non-zero. Polls one channel per call, round-robin over `1 … RECEIVER_CHANNELS_NUMBER`. Used as the arming gate. |
@@ -407,19 +425,19 @@ void FAC_ppm_receiver_calculate_channels_values(void);
 void FAC_mapper_apply_to_devices(void);
 ```
 
-Reads the five mapper settings, updates only the referenced mix / special functions, converts their normalised outputs into device units and applies them. **Must be called every loop iteration** to keep outputs alive. Devices with link value `0` are actively disabled (motors to 0, servo PWM off).
+Reads the five mapper settings, updates only the referenced mix / special functions, converts their normalised outputs into device units and applies them. **Must be called every loop iteration** to keep outputs alive. Devices with link value `0` are actively disabled **every pass** (motors forced to speed 0, servo PWM off) — for motors this is a re-applied write, not a one-time default, so a motor that gets unmapped while spinning is actually stopped instead of freezing at its last commanded speed (issue #21).
 
 **Link value validity** — only `100 … 109` (mix outputs) and `200 … 210` (special function outputs) decode to a real output, but the setting's `{min, max}` is a single `0 … 210` interval and cannot express the gap, so `110 … 199` reaches the mapper. The output accessors bounds-check the index themselves and return `FAC_VALUE_ZERO`, which makes an invalid link behave like "no output" instead of reading past the arrays — see issue #17.
 
 ### 8.7 `fac_mixes` — mix framework
 
 ```c
-void  FAC_mixes_init(void);
-void  FAC_mix_update(void);
-void  FAC_mixes_update_mix_inputs(void);
-void  FAC_mixes_update_mix_outputs(float mix_output[]);
-float FAC_mixes_GET_input (uint8_t inputNumber);          // 0-based
-float FAC_mixes_GET_output(uint8_t outputNumber);         // 0-based
+void        FAC_mixes_init(void);
+void        FAC_mix_update(void);
+void        FAC_mixes_update_mix_inputs(void);
+void        FAC_mixes_update_mix_outputs(fac_value_t mix_output[]);
+fac_value_t FAC_mixes_GET_input (uint8_t inputNumber);          // 0-based
+fac_value_t FAC_mixes_GET_output(uint8_t outputNumber);         // 0-based
 ```
 
 | Function | Description |
@@ -435,13 +453,13 @@ Both the input channel and the reversal flag are **cached at `init()`**, so chan
 ### 8.8 `fac_functions` — special-function framework
 
 ```c
-void  FAC_functions_init(void);
-void  FAC_functions_update(uint8_t sFunctionID);
-void  FAC_functions_update_input (uint8_t functionNumber);
-void  FAC_functions_update_inputs(void);
-void  FAC_functions_SET_output(uint8_t functionNumber, float outputValue);
-float FAC_functions_GET_input (uint8_t functionNumber);
-float FAC_functions_GET_output(uint8_t functionNumber);
+void        FAC_functions_init(void);
+void        FAC_functions_update(uint8_t sFunctionID);
+void        FAC_functions_update_input (uint8_t functionNumber);
+void        FAC_functions_update_inputs(void);
+void        FAC_functions_SET_output(uint8_t functionNumber, fac_value_t outputValue);
+fac_value_t FAC_functions_GET_input (uint8_t functionNumber);
+fac_value_t FAC_functions_GET_output(uint8_t functionNumber);
 ```
 
 | Function | Description |
@@ -474,7 +492,7 @@ void FAC_motor_make_noise(uint16_t freq, uint16_t duration);   // blocking
 
 | Function | Description |
 |---|---|
-| `FAC_motor_init` | Starts the soft-PWM engine at the configured frequency, binds pins, applies reversal/brake settings, forces all motors to speed 0. |
+| `FAC_motor_init` | **First call**: starts the soft-PWM engine at the configured frequency (`initDMApwm()`, which also zeroes the PWM buffer), binds pins, applies reversal/brake settings, forces all motors to speed 0 and writes that into the buffer. **Later calls** (from *apply settings*): does not re-clear the buffer — only re-applies reversal/brake, and if the frequency changed, retunes it through `FAC_DMA_pwm_change_freq()` alone. See issue #19. |
 | `FAC_motor_set_speed_direction` | Sets and **immediately applies** direction (`FORWARD`/`BACKWARD`) and speed (`0 … MOTOR_SPEED_RESOLUTION-1`). `motorNumber` is 1–3. Reversal is applied internally. |
 | `FAC_motor_set_brake_status` | Brake (`TRUE`) vs. coast (`FALSE`) mode. Takes effect on the next apply. |
 | `FAC_motor_enable_brake` / `_disable_brake` | Convenience wrappers over the above. |
@@ -507,7 +525,7 @@ uint8_t  FAC_servo_GET_is_reversed(uint8_t servoNumber);
 
 | Function | Description |
 |---|---|
-| `FAC_servo_init` | Starts TIM3 CH3/CH4, applies frequency and per-servo min/max pulse settings, then **disables both servos** as a safety precaution. |
+| `FAC_servo_init` | **First call**: starts TIM3 CH3/CH4, applies frequency and per-servo min/max pulse settings, then **disables both servos** as a safety precaution. **Later calls** (from *apply settings*): always re-applies min/max pulse settings, but only retunes the frequency through `HAL_TIM_Base_Init()` (which restarts the timer counter mid-pulse) if the frequency setting actually changed, and does not touch the enable/disable state. See issue #19. |
 | `FAC_servo_set_position` | Sets and applies position `0 … MAX_SERVO_VALUE`, mapped into the configured `[min_us, max_us]` pulse window. Reversal applied internally. |
 | `FAC_servo_enable` / `_disable` | Enables/disables the PWM. Disabling writes `CCR = 0`, producing no pulse at all. |
 | `FAC_servo_is_reversed` | Sets the reversal flag and re-applies. |
@@ -633,6 +651,58 @@ uint8_t CDC_Transmit_FS(uint8_t *Buf, uint16_t Len);
 
 Returns `USBD_BUSY` if the previous transfer has not completed — **the firmware does not retry**, so a response can be silently dropped if the host polls faster than the device drains.
 
+### 8.18 `fac_math.h` — normalized integer math primitives
+
+Header-only (`static inline`), no makefile regeneration needed. This is the integer math a mix or special function is meant to be built out of instead of arbitrary C — **no floats anywhere in the mix/function/mapper chain**, since the M0 has no FPU and every float op is a software library call.
+
+```c
+typedef int32_t fac_value_t;
+#define FAC_VALUE_MAX  1000
+#define FAC_VALUE_MIN  (-1000)
+#define FAC_VALUE_ZERO 0
+```
+
+The `±1000` scale is not arbitrary: it equals `RECEIVER_CHANNEL_RESOLUTION`, `MOTOR_SPEED_RESOLUTION` and `SERVO_POSITION_RESOLUTION`, so conversions at both ends of the chain are exact. **Integer division truncates toward zero** (`-7/2` is `-3`, not `-4`) — anything simulating this math off-device (e.g. a future browser-based mix editor) must use `Math.trunc`, never `Math.floor`, to stay bit-identical.
+
+**1) Normalized values** — operate on `[-1000, +1000]` and always saturate:
+
+```c
+fac_value_t FAC_math_clamp (fac_value_t v);                                   // 0 divisions
+fac_value_t FAC_math_abs   (fac_value_t v);                                   // 0
+fac_value_t FAC_math_add   (fac_value_t a, fac_value_t b);                    // 0
+fac_value_t FAC_math_sub   (fac_value_t a, fac_value_t b);                    // 0
+fac_value_t FAC_math_mul   (fac_value_t a, fac_value_t b);                    // 1  — a*b/1000
+fac_value_t FAC_math_scale (fac_value_t v, int32_t percent);                  // 1  — v*percent/100, |percent| <= 10000
+fac_value_t FAC_math_min   (fac_value_t a, fac_value_t b);                    // 0
+fac_value_t FAC_math_max   (fac_value_t a, fac_value_t b);                    // 0
+fac_value_t FAC_math_blend (fac_value_t a, fac_value_t b, fac_value_t weight); // 1  — weight 0=all a, 1000=all b
+fac_value_t FAC_math_deadzone(fac_value_t v, fac_value_t size);               // 1  — ignores the first `size` units of travel, restretches the rest
+fac_value_t FAC_math_expo  (fac_value_t v, fac_value_t amount);               // 3  — RC expo, cubic blend, amount 0=linear .. 1000=full cubic
+int32_t     FAC_math_to_range  (fac_value_t v, int32_t out_min, int32_t out_max); // 1  — -1000..+1000 -> out_min..out_max
+fac_value_t FAC_math_from_range(int32_t x, int32_t in_min, int32_t in_max);       // 1  — in_min..in_max -> -1000..+1000, 0 if the range is empty
+```
+
+**2) Raw fixed point** — the whole `int32_t` range, does **not** saturate. For gyro/accel processing, where clamping to 1000 early would throw the signal away; normalize at the end with `FAC_math_from_range`:
+
+```c
+int32_t FAC_math_mul_scaled(int32_t a, int32_t b, int32_t scale); // 1 division — a*b/scale, 0 if scale is 0
+int32_t FAC_math_div_scaled(int32_t a, int32_t b, int32_t scale); // 1 division — a*scale/b, 0 if b is 0
+int32_t FAC_math_clamp_to  (int32_t v, int32_t min, int32_t max); // 0 divisions
+```
+
+**3) Angles and trigonometry** — a full turn is `FAC_ANGLE_TURN` = 4096 units (so wrapping is one `AND`, not a modulo); no lookup table, polynomial approximations instead:
+
+```c
+int32_t     FAC_math_angle_wrap(int32_t angle);        // 0 divisions
+fac_value_t FAC_math_sin(int32_t angle);                // 4 divisions
+fac_value_t FAC_math_cos(int32_t angle);                // 4 (calls sin with a quarter-turn offset)
+int32_t     FAC_math_atan2(int32_t y, int32_t x);        // 6 divisions — full turn, 0 when x=y=0
+```
+
+Measured against the real functions over a whole turn: `sin`/`cos` within 2 units out of 1000 (0.2 %) and exact at the quadrant points; `atan2` within 2 angle units, i.e. 0.18°.
+
+**Cost model**: the M0 has no hardware divider and no long multiply, so the compiler cannot fold a constant `/1000` into a multiply-and-shift — even that becomes an `__aeabi_idiv` call. The division counts above are exact for each primitive; `clamp`/`abs`/`add`/`sub`/`min`/`max`/`clamp_to`/`angle_wrap` cost none, which is why a mix built only out of those (the simple tank mix, for instance) costs **no division at all**.
+
 ---
 
 ## 9. USB protocol reference
@@ -711,11 +781,11 @@ Adding a new `.c` file requires regenerating the STM32CubeIDE build files (`Debu
 
 Found while documenting the code. Numbering is kept stable, so entries move to [11.1 Fixed](#111-fixed) or [11.2 Withdrawn](#112-withdrawn-not-bugs) instead of being renumbered. The same list is tracked in [CLAUDE.md](CLAUDE.md).
 
-The original list is now closed. What remains is one enum entry whose feature was never written:
+What remains open is one enum entry whose feature was never written; everything else, including #19–#21 found later from a live hardware report rather than from reading the code, is closed:
 
 | # | Severity | Location | Issue |
 |---|---|---|---|
-| 8 | **Not a defect** | `fac_functions.c` | `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are declared in the enum and reachable via the mapper (`200+8` … `200+10`), but have no `case` in `FAC_functions_update()`, so they output a constant `0.0f`. The DC-servo function was simply never implemented — this is a feature to write, not a bug to fix. The read stays in bounds (the outputs array holds 20 entries). |
+| 8 | **Not a defect** | `fac_functions.c` | `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are declared in the enum and reachable via the mapper (`200+8` … `200+10`), but have no `case` in `FAC_functions_update()`, so they output a constant `FAC_VALUE_ZERO`. The DC-servo function was simply never implemented — this is a feature to write, not a bug to fix. The read stays in bounds (the outputs array holds 20 entries). |
 
 ### 11.1 Fixed
 
@@ -735,8 +805,11 @@ The original list is now closed. What remains is one enum entry whose feature wa
 | 14 | **Low** | `fac_std_receiver.c` | `FAC_std_receiver_new_channel_value()` compared the pre-deadzone input against the post-deadzone stored value, so it reported "out of range" whenever the deadzone changed the value — which, with any non-zero deadzone, is almost always. Every caller ignored the return. | The function returns `void`. The two receiver backends' `@note` lines referring to the return value were removed. |
 | 15 | **Info** | `fac_motors.h`, `fac_servo.h` | `FAC_motor_GET_*` and `FAC_servo_GET_servo_freq()` were non-static but absent from the headers — unusable without a manual `extern`. | Declared in their headers, matching the other modules (`fac_servo`, `fac_battery` and `fac_app` all expose their `GET_` accessors). `FAC_motor_GET_reverse()` also returned `uint16_t` for a `uint8_t` field; it now returns `uint8_t`. |
 | 16 | **Info** | `fac_battery.h` | `FAC_battery_GET_voltage()` and `FAC_battery_SET_calibration_offset()` were each declared twice; `FAC_battery_GET_type()` returned `uint16_t` for a `uint8_t` value. | Duplicates removed, return type narrowed to `uint8_t` in both the header and `fac_battery.c`. Callers were already assigning it to `uint8_t`. |
-| 17 | **Medium** | `fac_mapper.c`, `fac_mixes.c`, `fac_functions.c` | Found while investigating #8, not part of the original list. The mapper settings have a single range of `0…210`, but only `100…109` (mix outputs) and `200…210` (function outputs) decode to something real. A value in **`110…199`** passed validation, entered the mix branch, and produced `FAC_mixes_GET_output(10…99)` — up to 90 floats read past the end of a 10-element array. The garbage float became a motor speed (`\|val\| × 1000`, then clamped to `MAX_DMA_PWM_VALUE`), so a mapper value of e.g. 150 could **spin a motor at full speed** in an arbitrary direction, and the value persisted to EEPROM. | `FAC_mixes_GET_output/_GET_input` and `FAC_functions_GET_output/_GET_input/_SET_output` bounds-check their index and return `0.0f` (or ignore the write) when it is out of range, so an invalid link resolves to "no output" for every caller. `FAC_mapper_apply_to_devices()` additionally guards its `functionsUpdated[]` index. The settings range is unchanged — it cannot express a gap, which is why the check belongs in the accessors. |
+| 17 | **Medium** | `fac_mapper.c`, `fac_mixes.c`, `fac_functions.c` | Found while investigating #8, not part of the original list. The mapper settings have a single range of `0…210`, but only `100…109` (mix outputs) and `200…210` (function outputs) decode to something real. A value in **`110…199`** passed validation, entered the mix branch, and produced `FAC_mixes_GET_output(10…99)` — up to 90 floats read past the end of a 10-element array. The garbage float became a motor speed (`\|val\| × 1000`, then clamped to `MAX_DMA_PWM_VALUE`), so a mapper value of e.g. 150 could **spin a motor at full speed** in an arbitrary direction, and the value persisted to EEPROM. | `FAC_mixes_GET_output/_GET_input` and `FAC_functions_GET_output/_GET_input/_SET_output` bounds-check their index and return `FAC_VALUE_ZERO` (or ignore the write) when it is out of range, so an invalid link resolves to "no output" for every caller. `FAC_mapper_apply_to_devices()` additionally guards its `functionsUpdated[]` index. The settings range is unchanged — it cannot express a gap, which is why the check belongs in the accessors. |
 | 18 | **Info** | `fac_mapper.c` `FAC_mapper_apply_to_devices()` | Found later, outside the original list. The loop over the link array used `for (int i = 0; i < sizeof(links); i++)` on `uint8_t links[5]`, i.e. a **byte count** used as an element count. Correct only because the element size happens to be 1 byte; changing the array's type to anything wider would silently iterate past its end and read `functionsUpdated[]` indices out of a stale stack. | The element count is now explicit: `i < sizeof(links) / sizeof(links[0])`, the same idiom already used in `DMApwm.c`. Same 5 iterations today, but correct for any element type. |
+| 19 | **High** | `fac_std_receiver.c`, `Libraries/DMApwm.c`, `fac_servo.c` | Found from a live hardware report — motors and servos kicking hard enough to spike current draw and occasionally brown out the supply on every FAC Tool "apply" — not from reading the code. `FAC_app_init_all_modules()` (USB command 06) unconditionally re-ran the boot-time init of every output module on a robot that could be armed and moving. `FAC_std_reciever_init()` zeroed `receiver.channels[]`; a channel of `0` decodes to `-1000` (`FAC_math_from_range(0,0,1000)`), i.e. full negative travel, not "no signal", so every mix/function briefly commanded full reverse / servo end-stop until the next RC frame (~20 ms). `initDMApwm()` zeroed the soft-PWM buffer via `zeroSoftPWM()`; a zeroed BSRR entry writes nothing, so the six motor pins **froze** at whatever level they held at that instant instead of resuming a duty cycle. `FAC_servo_apply_new_freq()` called `HAL_TIM_Base_Init()`, whose `TIM_Base_SetConfig()` ends with `EGR = TIM_EGR_UG`, an immediate update event that restarts TIM3's counter mid-pulse, truncating or doubling whichever pulse was in flight. | Each of the three modules now carries a `static uint8_t <module>Initialized` flag. `FAC_std_reciever_init()` returns immediately when the receiver `type` is unchanged. `FAC_motor_init()` only calls the buffer-clearing `initDMApwm()` on the first call; a later frequency change goes through `FAC_DMA_pwm_change_freq()` alone. `FAC_servo_init()` only calls `FAC_servo_apply_new_freq()` when the frequency setting actually changed, and its two safety `FAC_servo_disable()` calls are boot-only. Speed, direction, servo-enable and servo-position are never re-applied by these inits — the mapper rewrites them on the next loop pass regardless. See [§6.4](#64-applying-settings-without-disturbing-a-live-robot). |
+| 20 | **High** | `fac_eeprom.c` `FAC_eeprom_write_byte()` | Found alongside #19, while auditing `FAC_settings_STORE_ALL_to_eeprom()` after the same hardware report. `FAC_eeprom_write_byte()` blocks ~10 ms per byte and nothing on the EEPROM path refreshed the IWDG (~400 ms timeout — this file previously stated 500 ms, which was also wrong; see [§7](#7-timing-and-the-watchdog)). A save with ~20 or more **changed** settings (20 ms each) already exceeds the timeout and resets the board mid-write, leaving the EEPROM with new values up to the setting it reached and stale ones after it, silently. **Not confirmed as the cause of any specific report** — a save of only a handful of settings, with the FAC Tool waiting for each write's ack before sending the next, stays far under the threshold — but a real, independent defect on any larger save regardless. | `HAL_IWDG_Refresh(&hiwdg)` added inside `FAC_eeprom_write_byte()`, immediately before the blocking `HAL_Delay(10)`. The main-loop refresh cannot substitute for it, since it only runs after the whole USB command has already returned. |
+| 21 | **Medium** | `fac_mapper.c` `FAC_mapper_apply_to_devices()` | Found alongside #19. The `if (mN_link) { … }` blocks for the three DC motors had no `else`, unlike the servo blocks a few lines below, which already forced a disabled servo's PWM off on every pass. A motor that was mapped, then unmapped (link value set to `0`) through the FAC Tool, kept running at its last commanded speed and direction forever — the mapper simply stopped writing to it instead of stopping it. | Each motor block now has an `else FAC_motor_set_speed_direction(n, FORWARD, 0);`, mirroring the servo disable a few lines below and matching what the function's own doc comment already claimed ("unmapped devices are forced safe"). |
 
 ### 11.2 Withdrawn (not bugs)
 
