@@ -10,6 +10,7 @@
 #include "FAC_Code/fac_eeprom.h"
 #include "main.h"
 #include "i2c.h"
+#include "iwdg.h"	// a full settings store is far longer than the watchdog timeout, see FAC_eeprom_write_byte
 
 static Eeprom eeprom;
 
@@ -47,11 +48,19 @@ static uint16_t FAC_eeprom_bytes_to_uint16(const uint8_t *array) {
 /**
  * @brief 		Store a byte into the eeprom memory via i2c
  * @note		Only one byte at time can be stored
+ * @IMPORTANT	The 10ms wait is the write cycle of the part, and it is blocking. A single byte is
+ * 				harmless, but the callers write many in a row: FAC_settings_STORE_ALL_to_eeprom()
+ * 				costs 20ms per CHANGED setting, so about 20 of them already exceed the ~400ms
+ * 				watchdog timeout. Nothing else refreshes it in between, because the refresh of the
+ * 				main loop only runs once the whole usb command has returned. Without the refresh
+ * 				below a large save resets the board halfway through, leaving the eeprom with the new
+ * 				values up to the setting it reached and the old ones after it
  * @datasheet	https://www.lcsc.com/datasheet/C7432363.pdf
  */
 static void FAC_eeprom_write_byte(uint8_t address, uint8_t value) {
 	uint8_t data = value;
 	HAL_I2C_Mem_Write(&hi2c1, EEPROM_ADDRESS, address, 1, &data, 1, 1000);
+	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms) THE WAIT BELOW IS BLOCKING
 	HAL_Delay(10);
 }
 

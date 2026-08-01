@@ -25,6 +25,7 @@
 #include "FAC_Code/fac_ppm_receiver.h"
 
 Std_receiver receiver;
+static uint8_t receiverInitialized = FALSE;	// the boot init already ran, see FAC_std_reciever_init
 
 /* STATIC FUNCTION PROTORYPES */
 static uint16_t FAC_std_receiver_SET_channel(uint8_t chNumber, uint16_t value);
@@ -175,11 +176,22 @@ void FAC_std_receiver_new_channel_value(uint8_t chNumber, uint16_t value) {
 }
 
 /**
- * @brief 	Initialize the std_reciever with all channels to zero, and initialize the correct receiver type
+ * @brief 		Initialize the std_reciever with all channels to zero, and initialize the correct receiver type
  * @visibility	Everywhere
- * @note  	It must be used at the firmware start up only
+ * @IMPORTANT	This is DESTRUCTIVE: it throws away the channel values and, through the backend init,
+ * 				the capture timestamps too. A channel of 0 is NOT "no signal", it is the stick at its
+ * 				full negative travel, because FAC_math_from_range maps 0 to -1000. So a mix reading a
+ * 				channel that has just been cleared commands FULL REVERSE, and a special function sends
+ * 				a servo to its end stop, until the backend captures a new frame, which takes up to a
+ * 				whole rc frame (~20ms). That is what made motors and servos jump on every apply from
+ * 				the fac tool, since FAC_app_init_all_modules() re-runs every module init
+ * @note		Re-running it with the type unchanged has nothing to reconfigure: the backend is
+ * 				already the right one and already feeding the channels, so it is left alone
  */
 void FAC_std_reciever_init(uint8_t type) {
+	if (receiverInitialized && type == receiver.type)
+		return;	// same backend already running, tearing it down would only lose the live channels
+
 	for (int i = 0; i < RECEIVER_CHANNELS_NUMBER; i++) {// initialize all the channels value to zero
 		receiver.channels[i] = 0;
 	}
@@ -199,6 +211,7 @@ void FAC_std_reciever_init(uint8_t type) {
 		// INITIALZE THIS TYPE OF RECEIVER..
 		break;
 	}
+	receiverInitialized = TRUE;
 }
 
 /**

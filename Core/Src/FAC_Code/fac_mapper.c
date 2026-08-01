@@ -121,7 +121,7 @@ void FAC_mapper_apply_to_devices(void) {
 	/* the measures are accumulated on locals and published on the volatiles only at the end of the
 	 * function: this way the debugger never reads a variable while it is being cleared or summed */
 	uint16_t tLinks = 0, tMix = 0, tFunctions = 0, tCalls = 0;
-	uint16_t tM1 = 0, tM2 = 0, tM3 = 0, tS1 = 0, tS2 = 0;// a device that is not mapped stays at 0
+	uint16_t tM1 = 0, tM2 = 0, tM3 = 0, tS1 = 0, tS2 = 0;// every device is written, mapped or not
 	FAC_debug_utils_crono_start();
 #endif
 	uint8_t m1_link = FAC_settings_GET_value(FAC_SETTINGS_CODE_MAPPER_M1);
@@ -181,36 +181,42 @@ void FAC_mapper_apply_to_devices(void) {
 
 
 	/* TRANSFER THE OUTPUTS TO THE CORRECT DEVICES */
+	/* an unmapped device is forced to a safe state on EVERY pass, exactly like a mapped one is
+	 * updated on every pass. Leaving it alone instead would freeze it on the last value it was
+	 * given, so a motor unmapped by the fac tool would keep running at the speed it had */
 	/* DC MOTOR 1 */
+#ifdef CRONOMETER_FAC_MAPPER
+	FAC_debug_utils_crono_start();
+#endif
 	if (m1_link) {	// ( mN_link == 0 -> not used) if used apply settings to it
-#ifdef CRONOMETER_FAC_MAPPER
-		FAC_debug_utils_crono_start();
-#endif
 		FAC_mapper_apply_to_DCmotor(1, m1_link);
+	} else
+		FAC_motor_set_speed_direction(1, FORWARD, 0);	// not used, stopped
 #ifdef CRONOMETER_FAC_MAPPER
-		tM1 = FAC_debug_utils_crono_stop();
+	tM1 = FAC_debug_utils_crono_stop();
 #endif
-	}
 	/* DC MOTOR 2 */
+#ifdef CRONOMETER_FAC_MAPPER
+	FAC_debug_utils_crono_start();
+#endif
 	if (m2_link) {	// ( mN_link == 0 -> not used) if used apply settings to it
-#ifdef CRONOMETER_FAC_MAPPER
-		FAC_debug_utils_crono_start();
-#endif
 		FAC_mapper_apply_to_DCmotor(2, m2_link);
+	} else
+		FAC_motor_set_speed_direction(2, FORWARD, 0);	// not used, stopped
 #ifdef CRONOMETER_FAC_MAPPER
-		tM2 = FAC_debug_utils_crono_stop();
+	tM2 = FAC_debug_utils_crono_stop();
 #endif
-	}
 	/* DC MOTOR 3 */
+#ifdef CRONOMETER_FAC_MAPPER
+	FAC_debug_utils_crono_start();
+#endif
 	if (m3_link) {	// ( mN_link == 0 -> not used) if used apply settings to it
-#ifdef CRONOMETER_FAC_MAPPER
-		FAC_debug_utils_crono_start();
-#endif
 		FAC_mapper_apply_to_DCmotor(3, m3_link);
+	} else
+		FAC_motor_set_speed_direction(3, FORWARD, 0);	// not used, stopped
 #ifdef CRONOMETER_FAC_MAPPER
-		tM3 = FAC_debug_utils_crono_stop();
+	tM3 = FAC_debug_utils_crono_stop();
 #endif
-	}
 	/* SERVO 1 */
 #ifdef CRONOMETER_FAC_MAPPER
 	FAC_debug_utils_crono_start();

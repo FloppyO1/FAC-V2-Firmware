@@ -17,6 +17,7 @@ static Motor motor1;
 static Motor motor2;
 static Motor motor3;
 static Motor *motors[MOTORS_NUMBER];	// array of pointers to all the motors
+static uint8_t motorsInitialized = FALSE;	// the boot init already ran, see FAC_motor_init
 
 /* STATIC FUNCTION PROTORYPES */
 static void FAC_set_pwm_duty(uint16_t pin, uint16_t duty);
@@ -206,28 +207,49 @@ void FAC_motor_make_noise(uint16_t freq, uint16_t duration) {
  * @brief 			Initialize all three motor values, and populate the array of pointers. It also initialize the DMA PWM generator
  * @visibility 		Visible everywhere
  * @note			Motors PWM are generated from the DMA
+ * @IMPORTANT		initDMApwm() clears the whole soft pwm buffer, and a cleared entry is a BSRR word
+ * 					of 0, which writes nothing: the six motor pins stay FROZEN at whatever level they
+ * 					held at that instant, a static drive instead of a duty cycle, until something
+ * 					rewrites the buffer. It must therefore run once, at boot. FAC_app_init_all_modules()
+ * 					calls this again on every apply from the fac tool, and there only the frequency
+ * 					has to follow the settings: FAC_DMA_pwm_change_freq() does it by writing the timer
+ * 					reload alone, leaving the running buffer untouched
+ * @note			Speed and direction belong to the mapper, which rewrites them on the next loop
+ * 					pass, so a re-init does not touch them: forcing them here would be the very stop
+ * 					and restart this function exists to avoid
  */
 void FAC_motor_init(void) {
-	initDMApwm(FAC_settings_GET_value(FAC_SETTINGS_CODE_MOTORS_FREQ));	// initialize the DMA PWM with the correct frequency
-	/* INITIALIZE THE ARRAY OF MOTOR POINTERs */
-	motors[0] = &motor1;
-	motors[1] = &motor2;
-	motors[2] = &motor3;
+	uint16_t freq = FAC_settings_GET_value(FAC_SETTINGS_CODE_MOTORS_FREQ);
+	uint8_t firstInit = !motorsInitialized;
 
-	motors[0]->pinF = M1_F_Pin;
-	motors[0]->pinB = M1_B_Pin;
+	if (firstInit) {
+		initDMApwm(freq);	// initialize the DMA PWM with the correct frequency
+		/* INITIALIZE THE ARRAY OF MOTOR POINTERs */
+		motors[0] = &motor1;
+		motors[1] = &motor2;
+		motors[2] = &motor3;
 
-	motors[1]->pinF = M2_F_Pin;
-	motors[1]->pinB = M2_B_Pin;
+		motors[0]->pinF = M1_F_Pin;
+		motors[0]->pinB = M1_B_Pin;
 
-	motors[2]->pinF = M3_F_Pin;
-	motors[2]->pinB = M3_B_Pin;
+		motors[1]->pinF = M2_F_Pin;
+		motors[1]->pinB = M2_B_Pin;
+
+		motors[2]->pinF = M3_F_Pin;
+		motors[2]->pinB = M3_B_Pin;
+	} else {
+		FAC_DMA_pwm_change_freq(freq);	// only the timer reload, the buffer keeps driving the pins
+	}
 
 	for (int i = 1; i <= MOTORS_NUMBER; i++) {	// for safety reason and apply the settings
 		FAC_motor_SET_reverse(i, FAC_settings_GET_value(FAC_SETTINGS_CODE_M1_REVERSED + (i-1)));
 		FAC_motor_SET_break_en(i, FAC_settings_GET_value(FAC_SETTINGS_CODE_M1_BRAKE_EN + (i-1)));	// motor will brake_en if speed = 0
-		FAC_motor_SET_direction(i, FORWARD);	// motor forward (doesn't care if speed = 0)
-		FAC_motor_SET_speed(i, 0);	// motor not spinning
+		if (firstInit) {
+			FAC_motor_SET_direction(i, FORWARD);	// motor forward (doesn't care if speed = 0)
+			FAC_motor_SET_speed(i, 0);	// motor not spinning
+			FAC_motor_apply_settings(i);// write the safe state into the buffer initDMApwm just cleared
+		}
 	}
 
+	motorsInitialized = TRUE;
 }

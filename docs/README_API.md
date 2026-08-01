@@ -24,7 +24,7 @@ Firmware for the **Floppy Ant Controller V2**, a control board for combat robots
 
 ## 1. Overview
 
-The firmware is **bare metal** — no RTOS, no dynamic allocation. A single super-loop runs a state machine at roughly 76 Hz. Its job is to read an RC receiver, transform those channel values through a user-configurable processing chain, and drive 3 DC motor outputs and 2 servo outputs — while enforcing arming, low-battery and cut-off safety rules.
+The firmware is **bare metal** — no RTOS, no dynamic allocation. A single super-loop runs a state machine at roughly 1 kHz. Its job is to read an RC receiver, transform those channel values through a user-configurable processing chain, and drive 3 DC motor outputs and 2 servo outputs — while enforcing arming, low-battery and cut-off safety rules.
 
 Everything a user can configure (mixing behaviour, channel assignment, reversal, PWM frequencies, voltage thresholds…) is stored as a table of 16-bit settings in an external EEPROM, editable over USB by the external **FAC Tool**. The firmware itself contains no robot-specific behaviour: it is a configurable engine.
 
@@ -58,7 +58,7 @@ The code is organised in layers, each in its own module under `Core/Src/FAC_Code
 | ADC + DMA | VBAT, ADC_AUX, VREFINT (3-channel scan) |
 | I2C1 | EEPROM (`0xA0`) and LSM6DS3 IMU (`0x6A`) |
 | USB FS (CDC) | Configuration and telemetry link to the FAC Tool |
-| IWDG | ~500 ms independent watchdog |
+| IWDG | ~400 ms independent watchdog |
 | EXTI | Receiver channel pins CH1–CH4 |
 
 **Pin map** (from `Core/Inc/main.h`):
@@ -92,7 +92,7 @@ The code is organised in layers, each in its own module under `Core/Src/FAC_Code
 
 ## 4. Main loop and operating states
 
-`FAC_app_main_loop()` runs forever. One iteration takes about **13 ms** (≈76 Hz) with the tank mix and two direct-link functions active.
+`FAC_app_main_loop()` runs forever. One iteration takes about **1 ms** (≈1 kHz).
 
 Each iteration: handle a pending USB command (if any), refresh the watchdog, then execute the current state.
 
@@ -264,13 +264,13 @@ USB reception happens in interrupt context but does almost nothing: `CDC_Receive
 
 ## 7. Timing and the watchdog
 
-The IWDG is configured with roughly a **500 ms** timeout and refreshed once per main-loop pass.
+The IWDG runs off the LSI with prescaler 32 and reload 499, which at the nominal 40 kHz is a **~400 ms** timeout (not 500 ms — the LSI tolerance puts the real figure somewhere between ~270 ms and ~530 ms). It is refreshed once per main-loop pass.
 
-> **Rule: any loop or delay that can exceed ~500 ms must call `HAL_IWDG_Refresh(&hiwdg)` inside it**, or the MCU resets.
+> **Rule: any loop or delay that can exceed ~400 ms must call `HAL_IWDG_Refresh(&hiwdg)` inside it**, or the MCU resets.
 
 Existing code follows this in EEPROM writes, IMU initialisation, the boot blink sequences, `FAC_motor_make_noise()` and `FAC_jingles_delay()`. `__HAL_DBGMCU_FREEZE_IWDG()` in `main()` stops the watchdog while halted in a debugger.
 
-Approximate cost of one `FAC_STATE_NORMAL` iteration: mapper ≈ 8 ms, arming check ≈ 0.8 ms, battery ≈ 0.2 ms, cut-off ≈ 8 µs, USB command ≈ 1 µs.
+The EEPROM path is the one that gets closest to the limit: `FAC_eeprom_write_byte()` blocks 10 ms per byte, so `FAC_settings_STORE_ALL_to_eeprom()` costs 20 ms per **changed** setting and about 20 changed settings would already exceed the timeout. The refresh lives inside `FAC_eeprom_write_byte()` for that reason — the main-loop refresh cannot help, since it only runs once the whole USB command has returned.
 
 ---
 

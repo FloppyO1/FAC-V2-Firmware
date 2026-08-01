@@ -29,7 +29,7 @@ STM32CubeIDE (Eclipse CDT) project — `.project`, `.cproject`, `FAC_Firmware_V2
 
 ## Architecture
 
-Bare-metal superloop, no RTOS. `main()` inits peripherals → `FAC_app_init()` → `FAC_app_main_loop()` forever (~13 ms/iteration ≈ 76 Hz with the tank mix + two direct links).
+Bare-metal superloop, no RTOS. `main()` inits peripherals → `FAC_app_init()` → `FAC_app_main_loop()` forever (~1 ms/iteration ≈ 1 kHz).
 
 ### Signal chain
 
@@ -40,7 +40,7 @@ RC receiver ──EXTI+TIM2──> fac_pwm_receiver / fac_ppm_receiver
                           fac_std_receiver          channels[] 0..999, deadzone applied
                                   │
                                   ▼
-              fac_mixes  /  fac_functions           normalized integers [-1000, +1000]
+              fac_mixes  /  fac_functions           normalized floats [-1.0f, +1.0f]
                                   │
                                   ▼
                              fac_mapper             resolves link values → devices
@@ -53,8 +53,8 @@ RC receiver ──EXTI+TIM2──> fac_pwm_receiver / fac_ppm_receiver
 
 - **`fac_std_receiver`** is the single abstraction all consumers use (`FAC_std_receiver_GET_channel(n)`, **1-based**). It lazily recalculates the channel from whichever receiver backend is active, applies the deadzone (center + extremes; channel 3 gets extremes only since throttle has no return spring), and clamps to `[0, RECEIVER_CHANNEL_RESOLUTION-1]`. Adding a receiver type = new `RECEIVER_TYPE_*` enum entry + `switch` cases in `FAC_std_reciever_init`, `FAC_std_receiver_GET_channel`, and `HAL_GPIO_EXTI_Callback`.
 - **Timing capture**: TIM2 is a free-running 32-bit counter at **0.5 µs/tick** (prescaler 24-1 on 48 MHz). `MAX_TIM2_TEORETICAL_CHANNEL_COUNT 4000` = 2 ms. PWM mode uses 4 EXTI pins (CH1–CH4); PPM mode uses CH1 only, 8 channels.
-- **Mixes vs. special functions**: a *mix* has up to 8 inputs / 10 outputs and only **one is active at a time** (`FAC_SETTINGS_CODE_ACTIVE_MIX`). A *special function* has exactly 1 input / 1 output, and up to 20 can run simultaneously; a function slot is disabled when its input channel setting is 0. Both write normalized integers `[-1000, +1000]` (`fac_value_t`, see `fac_math.h`).
-- **Mapper link encoding** (this is the crux of the configurability): each device setting (`FAC_SETTINGS_CODE_MAPPER_M1..S2`) stores `0` = unused, `100+i` = output *i* of the active mix, `200+i` = output of special function *i* (index into `FAC_SPECIAL_FUNCTIONS_ID`). `FAC_mapper_apply_to_devices()` runs each loop, updates only the mixes/functions actually referenced, then converts: motors get sign→direction + magnitude→speed; servos get `FAC_math_to_range(v, 0, SERVO_POSITION_RESOLUTION)`. **Only `100..109` and `200..210` are meaningful**, but the setting's `{min, max}` is a single `0..210` interval that cannot express the gap, so `110..199` is accepted by the validation layer — `FAC_mixes_GET_output()` / `FAC_functions_GET_output()` therefore bounds-check the index themselves and return `FAC_VALUE_ZERO`. Keep that guard if you touch them.
+- **Mixes vs. special functions**: a *mix* has up to 8 inputs / 10 outputs and only **one is active at a time** (`FAC_SETTINGS_CODE_ACTIVE_MIX`). A *special function* has exactly 1 input / 1 output, and up to 20 can run simultaneously; a function slot is disabled when its input channel setting is 0. Both write normalized `[-1.0f, +1.0f]`.
+- **Mapper link encoding** (this is the crux of the configurability): each device setting (`FAC_SETTINGS_CODE_MAPPER_M1..S2`) stores `0` = unused, `100+i` = output *i* of the active mix, `200+i` = output of special function *i* (index into `FAC_SPECIAL_FUNCTIONS_ID`). `FAC_mapper_apply_to_devices()` runs each loop, updates only the mixes/functions actually referenced, then converts: motors get sign→direction + magnitude→speed; servos get `map_float(-1..1 → 0..SERVO_POSITION_RESOLUTION)`. **Only `100..109` and `200..210` are meaningful**, but the setting's `{min, max}` is a single `0..210` interval that cannot express the gap, so `110..199` is accepted by the validation layer — `FAC_mixes_GET_output()` / `FAC_functions_GET_output()` therefore bounds-check the index themselves and return `0.0f`. Keep that guard if you touch them.
 - **Unmapped devices are forced safe**: motors to speed 0, servos PWM disabled.
 
 ### State machine (`FAC_app_main_loop`)
@@ -69,7 +69,15 @@ RC receiver ──EXTI+TIM2──> fac_pwm_receiver / fac_ppm_receiver
 
 `fac_settings.c` is the configuration hub. `enum FAC_SETTINGS_CODE` (in `fac_settings.h`) and the `settings[]` table (in `fac_settings.c`) are **positionally coupled** — the table is indexed by the enum value and must list rows in exactly the same order, each with `{code, default, min, max}`. `FAC_settings_SET_value()` rejects codes `>= FAC_SETTINGS_CODE_LAST` and clamps accepted values to `[min, max]`, so the table *is* the validation layer. The same bounds check guards `FAC_settings_GET_value()` and the two `FAC_settings_USB_SEND_setting_*()` helpers — the code byte arrives unvalidated from USB, so **any new function indexing `settings[]` must check it too**.
 
-Adding a setting: append to the enum before `FAC_SETTINGS_CODE_LAST`, append the matching row, and consume it wherever needed (usually in a module's `init()`, since `FAC_app_init_all_modules()` re-runs all module inits when the tool sends *apply*). The FAC Tool addresses settings by these numeric codes, so **inserting in the middle breaks tool compatibility and shifts every EEPROM slot**.
+Adding a setting: append to the enum before `FAC_SETTINGS_CODE_LAST`, append the matching row, and consume it wherever needed (usually in a module's `init()`, since `FAC_app_init_all_modules()` re-runs all module inits when the tool sends *apply*).
+
+**A module `init()` is therefore called on a live, possibly armed robot, and must not disturb an output it is not actually reconfiguring.** Each of the three output modules keeps a `static uint8_t <module>Initialized` flag and splits its body accordingly: the boot-only part (claiming the peripheral, clearing the soft-PWM buffer, the safety disables) runs once, and anything that glitches an output runs only when the setting it depends on really changed. The three traps, all of which used to fire on every *apply* and made the motors and servos kick hard enough to brown out the supply:
+
+- `FAC_std_reciever_init()` clears `receiver.channels[]` and the backend capture timestamps. **A channel of 0 is not "no signal", it is the stick at full negative travel** — `FAC_math_from_range(0, 0, 1000)` is `-1000` — so a mix reading a freshly cleared channel commands full reverse until the next RC frame lands, up to ~20 ms later. It now returns immediately when the receiver type has not changed.
+- `initDMApwm()` calls `zeroSoftPWM()`, and a zeroed entry is a BSRR word of `0`, which writes nothing: the six motor pins **freeze** at the level they held at that instant, a static drive instead of a duty cycle. It is boot-only now; a frequency change goes through `FAC_DMA_pwm_change_freq()`, which writes the timer reload alone.
+- `FAC_servo_apply_new_freq()` goes through `HAL_TIM_Base_Init()`, whose `EGR = TIM_EGR_UG` restarts TIM3's counter mid-pulse (the servo sees a truncated or double-length pulse). It now runs only on a real frequency change, and the safety `FAC_servo_disable()` calls are boot-only.
+
+Speed, direction, servo enable and servo position are **not** re-applied by these inits: they belong to the mapper, which rewrites them on the next loop pass ~1 ms later. The FAC Tool addresses settings by these numeric codes, so **inserting in the middle breaks tool compatibility and shifts every EEPROM slot**.
 
 - **EEPROM** (I2C1, `fac_eeprom.c`): each setting is a `uint16_t` at byte address `code * 2`; ~125 settings fit in the 2 kbit part. Writes are skipped when the value is unchanged (wear reduction) and each byte write costs a 10 ms blocking delay.
 - **Factory-reset mechanism**: `FAC_settings_init(FIRMWARE_VERSION_TAG)` compares a boot marker byte in EEPROM with `FIRMWARE_VERSION_TAG` (a hash of MAJOR/MINOR/PATCH from `config.h`). **Bumping the firmware version in `config.h` therefore wipes user settings back to defaults on the next boot** — intended when the settings layout changes, but be aware it happens for any version bump. Boot blink count tells them apart: 10 fast blinks = defaults written, 3 blinks = normal load.
@@ -95,7 +103,9 @@ Adding a setting: append to the enum before `FAC_SETTINGS_CODE_LAST`, append the
 
 ### Watchdog
 
-IWDG is enabled with a ~500 ms timeout and refreshed once per main-loop pass. **Any loop or delay longer than ~500 ms must call `HAL_IWDG_Refresh(&hiwdg)` inside it** — existing code does this in EEPROM writes, IMU init, boot blink sequences, and `FAC_motor_make_noise`. `__HAL_DBGMCU_FREEZE_IWDG()` in `main()` keeps it from firing while halted in the debugger.
+IWDG is enabled with a **~400 ms** timeout (LSI 40 kHz, prescaler 32, reload 499 — *not* 500 ms, which this file used to claim) and refreshed once per main-loop pass. **Any loop or delay longer than ~400 ms must call `HAL_IWDG_Refresh(&hiwdg)` inside it** — existing code does this in EEPROM writes, IMU init, boot blink sequences, and `FAC_motor_make_noise`. `__HAL_DBGMCU_FREEZE_IWDG()` in `main()` keeps it from firing while halted in the debugger.
+
+The EEPROM path is the tightest one and the refresh in it is **load-bearing, not decorative**: `FAC_eeprom_write_byte()` blocks 10 ms per byte, so a `FAC_settings_STORE_ALL_to_eeprom()` (USB command 06) costs 20 ms for every setting whose value actually changed, and ~20 changed settings already exceed the timeout. The main-loop refresh cannot cover it, because it only runs after the whole USB command has returned. Without the refresh a large save resets the board halfway through and leaves the EEPROM with the new values up to the setting it reached and the old ones after it — and since the mapper settings are codes 57–61 of 64, they are exactly what a truncated save loses.
 
 ## Extending: mixes and special functions
 
@@ -105,8 +115,6 @@ Both have a **9-step numbered recipe in the file header comments** — follow th
 - New special function: copy `…/functions/fac_template_function.{c,h}.template` → recipe in `fac_direct_link_function.c`.
 
 In both cases the touch points are: the ID enum (`FAC_MIXES_ID` / `FAC_SPECIAL_FUNCTIONS_ID`), a `case` in the dispatcher (`FAC_mix_update()` / `FAC_functions_update()`), the `#include` in `fac_mixes.c` / `fac_functions.c`, and — for mixes — the `max` of `FAC_SETTINGS_CODE_ACTIVE_MIX` follows `FAC_MIX_LAST-1` automatically. The `/* INSERT YOUR CODE HERE */` region is the only part of the generated body to modify; the boilerplate around it (input fetch, output clamping, write-back) must stay.
-
-**Do not "simplify" the `diff` term in `fac_simple_tank_mix.c` into a plain saturated sum.** A transmitter gimbal moves in a *square* gate, so throttle and steering can both be at full travel at once. A clipped sum would behave as if the gate were circular and collapse every corner of the square to the same output; the `diff` term redistributes the leftover travel so the corners stay distinguishable and the robot still steers at full throttle. The rationale is repeated in the source, at the point where it is tempting to delete.
 
 Step 3's `mix_id` / `first_special_function_id` is a **documentation marker only** — it records which enum ID the file implements, and step 5's `case` label uses the enum name directly (a `static const` from another translation unit is neither visible nor a valid `case` label). It is therefore deliberately never read, and carries `__attribute__((unused))` so `-Wall` stays quiet; keep the attribute when copying the template.
 
@@ -123,8 +131,6 @@ Two things about it that are load-bearing:
 
 Accuracy of the table-free trig, measured against the real functions over the whole turn: `sin`/`cos` within 2 units out of 1000 and exact at the quadrant points, `atan2` within 0.18°.
 
-The whole chain is converted: `Mixes`/`SpecialFunctions` store `fac_value_t`, the mapper consumes it, and the mix/function boilerplate uses `FAC_math_clamp`. Verified on the generated code: **zero soft-float calls** in `fac_mapper.c`, `fac_mixes.c`, `fac_functions.c`, `fac_simple_tank_mix.c` and `fac_direct_link_function.c`, and the tank mix now costs **no division at all**.
-
 ### Planned: graphical mix/function editor
 
 The idea is a browser tool, in the spirit of the parent repo's `TOOLS/FAC_jingle_composer.html`, where a mix or special function is assembled **graphically from blocks**, simulated on the PC against synthetic stick input, and then exported as the `.c`/`.h` pair ready to drop into `mixes_functions/`.
@@ -138,7 +144,7 @@ The open problem is **registration, not generation**. Emitting the two files is 
 - Naming: `FAC_<module>_<action>()`; **uppercase `GET_`/`SET_`** marks accessors, and setters are usually `static` — modules expose behavior, not state. Module state lives in a single `static` struct instance per file.
 - **Motors, servos, channels, and mix inputs are 1-based in public APIs**, arrays are 0-based — hence the pervasive `[n - 1]`. Mix/function *output indices*, by contrast, are 0-based.
 - `TRUE`/`FALSE` (from `main.h`), not `stdbool`.
-- Values crossing module boundaries are normalized **integers** `[-1000, +1000]` of type `fac_value_t` — **no floats anywhere in the mix/function/mapper chain**, M0 has no FPU. `fac_math.h` holds the primitives; `map_int32`/`map_uint32` in `fac_app.c` remain for arbitrary range conversions, `map_float` is now only used outside this chain.
+- Values crossing module boundaries are normalized floats `[-1.0f, +1.0f]`; `map_float`/`map_int32`/`map_uint32` in `fac_app.c` do the range conversions. Inner mix math often uses scaled integers (×1000) because M0 has no FPU.
 - Comments and identifiers contain non-native-English spellings (`PROTORYPES`, `PUBBLIC`, `outouts`, `SPECIAL_FUNCITONS_NUMBER`, `FAC_std_reciever_init`). Match the existing spelling when referencing them; don't "fix" them casually — several are part of the public API surface.
 - Tabs for indentation, K&R braces, doc blocks use `@brief`/`@note`/`@retval`/`@IMPORTANT`.
 
@@ -149,7 +155,7 @@ The list found during the API documentation pass is now **closed**: #1–#4, #6,
 Lesson worth keeping: that list was a set of *suspicions*, not verified defects. Issue #5 turned out to be a misreading of working code and "fixing" it would have broken the jingles, while #17 — the only one with a real safety consequence left — was found by reading the code around #8, not from the list. Confirm the mechanism, and ask the user (who has the hardware) before changing behaviour.
 
 **Not a defect — unimplemented feature**
-8. `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are in the enum and mappable (`200+8`…`200+10`) but have no `case` in `FAC_functions_update()`, so they output a constant `FAC_VALUE_ZERO`. The function itself was never written — this is a feature to implement, not a bug to fix.
+8. `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are in the enum and mappable (`200+8`…`200+10`) but have no `case` in `FAC_functions_update()`, so they output a constant `0.0f`. The function itself was never written — this is a feature to implement, not a bug to fix.
 
 Verified as *not* problems: the `settings[]` table and `enum FAC_SETTINGS_CODE` match exactly (64 entries, same order).
 

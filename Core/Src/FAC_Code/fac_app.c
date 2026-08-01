@@ -72,13 +72,13 @@ uint8_t FAC_app_GET_battery_type(void) {
 	return fac_application.battery_type;
 }
 /* FUNCTION DEFINITION */
-void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple tank mix on and two other direct link function)
+void FAC_app_main_loop(void) {	// one cycle every ~1ms
 #ifdef CRONOMETER_ENTIRE_FAC_APP
 	FAC_debug_utils_crono_start();
 #endif
 
 //	HAL_GPIO_TogglePin(DIGITAL_AUX1_GPIO_Port, DIGITAL_AUX1_Pin);	// used to see the time of execution
-	if (newComSerialReceived) {		//	1us
+	if (newComSerialReceived) {
 		// understand the command received and do what you have to do
 #ifdef CRONOMETER_FAC_APP
 		FAC_debug_utils_crono_start();
@@ -92,9 +92,9 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
 		newComSerialReceived = FALSE;
 	}
 
-	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
+	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 #ifndef IM_TESTING_FAC_TOOL
-	/* MAIN FUNCTIONS OF THE APP - STATES OF OPERATION */	// 13ms
+	/* MAIN FUNCTIONS OF THE APP - STATES OF OPERATION */
 	switch (FAC_app_GET_current_state()) {
 	case FAC_STATE_DISARMED: {
 		/* DISABLE ALL DEVICES (MOTORS AND SERVOS) */
@@ -141,7 +141,7 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
 		break;
 	}
 	case FAC_STATE_NORMAL: {
-		/* UPDATE THE MAPPED MOTORS AND SERVOS */   // 8ms max
+		/* UPDATE THE MAPPED MOTORS AND SERVOS */
 #ifdef CRONOMETER_FAC_APP
 		FAC_debug_utils_crono_start();
 #endif
@@ -150,7 +150,7 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
 		mapper_execution_time = FAC_debug_utils_crono_stop();
 #endif
 
-		/* CHECK ARMING CHANNEL IF USED */	// 800us max
+		/* CHECK ARMING CHANNEL IF USED */
 #ifdef CRONOMETER_FAC_APP
 		FAC_debug_utils_crono_start();
 #endif
@@ -168,7 +168,7 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
 		arming_check_execution_time = FAC_debug_utils_crono_stop();
 #endif
 
-		/* LOW BATTERY DETECTOR */		// 200us
+		/* LOW BATTERY DETECTOR */
 		/* both thresholds (low battery and cut off) are per cell values, so they are compared against Vcell */
 #ifdef CRONOMETER_FAC_APP
 		FAC_debug_utils_crono_start();
@@ -189,7 +189,7 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
 		battery_check_execution_time = FAC_debug_utils_crono_stop();
 #endif
 
-		/* CUT OFF DETECTION */		// 8us
+		/* CUT OFF DETECTION */
 #ifdef CRONOMETER_FAC_APP
 		FAC_debug_utils_crono_start();
 #endif
@@ -289,9 +289,9 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
  *
  */
 void FAC_app_init(void) {
-	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
+	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 	HAL_Delay(300);
-	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
+	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 
 #ifdef FUNCTION_CLONOMETER
 	FAC_debug_utils_crono_init();// not under CRONOMETER_FAC_APP, every measurement point needs it
@@ -304,17 +304,17 @@ void FAC_app_init(void) {
 
 	/* INERTIAL MESUREMENT UNIT INIT */
 	for (int i = 0; i < 100; i++) {	// wait for 1000ms (stabilization of the supply voltage)
-		HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
+		HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 		HAL_Delay(10);
 	}
 	FAC_IMU_init();
-	HAL_IWDG_Refresh(&hiwdg);// refresh the watchdog	(500ms) NEXT TWO ARE A BIT LONG TO EXECUTE
+	HAL_IWDG_Refresh(&hiwdg);// refresh the watchdog	(~400ms) NEXT TWO ARE A BIT LONG TO EXECUTE
 	FAC_IMU_init_accelerometer();
 	FAC_IMU_init_gyroscope();
 	if (FAC_IMU_GET_status() != HAL_OK) {
 		for (int i = 0; i < 20; i++) {
 			HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-			HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
+			HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 			HAL_Delay(200);
 		}
 	} else {

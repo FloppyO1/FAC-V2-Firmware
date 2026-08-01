@@ -26,8 +26,10 @@
 //#define CRONOMETER_FAC_APP		// blocks of FAC_app_main_loop (the states of the app)
 //#define CRONOMETER_FAC_MAPPER		// blocks of FAC_mapper_apply_to_devices (mix update and devices)
 
-#if defined(CRONOMETER_FAC_APP) && defined(CRONOMETER_FAC_MAPPER) && defined(CRONOMETER_ENTIRE_FAC_APP)
-#error "Cronometer measures cannot be nested: enable only one CLONOMETER_* at a time"
+// the sum counts how many are enabled: with && the check would only fire when ALL of them are
+// defined, while the hazard is already there with any TWO of them (defined() is 1 or 0 in a #if)
+#if (defined(CRONOMETER_ENTIRE_FAC_APP) + defined(CRONOMETER_FAC_APP) + defined(CRONOMETER_FAC_MAPPER)) > 1
+#error "Cronometer measures cannot be nested: enable only one CRONOMETER_* at a time"
 #endif
 #endif
 #endif
