@@ -435,6 +435,7 @@ Both the input channel and the reversal flag are **cached at `init()`**, so chan
 ```c
 void  FAC_functions_init(void);
 void  FAC_functions_update(uint8_t sFunctionID);
+void  FAC_functions_update_input (uint8_t functionNumber);
 void  FAC_functions_update_inputs(void);
 void  FAC_functions_SET_output(uint8_t functionNumber, float outputValue);
 float FAC_functions_GET_input (uint8_t functionNumber);
@@ -445,7 +446,8 @@ float FAC_functions_GET_output(uint8_t functionNumber);
 |---|---|
 | `FAC_functions_init` | Loads each function's input channel from settings; zeroes inputs and outputs. |
 | `FAC_functions_update` | Dispatches to the implementation for `sFunctionID` (an `FAC_SPECIAL_FUNCTIONS_ID` value). The three `DC_SERVO` IDs are declared but their function was never written — see issue #8. |
-| `FAC_functions_update_inputs` | Refreshes all 20 inputs from the receiver, normalised to `[-1, +1]`. Disabled slots (input channel `0`) are reset to `0.0f`, like the mix version. |
+| `FAC_functions_update_input` | Refreshes **one** slot from the receiver, normalised to `[-1, +1]`; a disabled slot (input channel `0`) is reset to `0.0f`, and an out-of-range index is ignored. This is what the function boilerplate calls: a special function has exactly one input, so refreshing all 20 slots was the same work repeated once per linked function. |
+| `FAC_functions_update_inputs` | Loops `FAC_functions_update_input` over all 20 slots. Kept for code that really needs every slot at once — the boilerplate no longer uses it. |
 | `FAC_functions_SET_output` | Where a function publishes its result. Ignores an out-of-range `functionNumber`. |
 | `FAC_functions_GET_input` / `_GET_output` | Read the shared arrays. Both bounds-check the index and return `0.0f` when it is out of range — the mapper can reach them with an invalid link value (issue #17). |
 

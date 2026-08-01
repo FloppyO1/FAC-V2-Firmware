@@ -72,7 +72,7 @@ static const uint8_t __attribute__((unused)) first_special_function_id = FAC_SPE
 void FAC_direct_link_function_update(uint8_t sFunctionID) {		// 4) of HOW TO MAKE A SPECIAL FUNCTION
 	// this code must be left as it is, DON'T TOUCH IT!
 	uint8_t functionArrayPosition = sFunctionID;// position for the input and output in the functions array
-	FAC_functions_update_inputs();
+	FAC_functions_update_input(functionArrayPosition);
 	float input = FAC_functions_GET_input(functionArrayPosition);
 	float output = 0.0f;
 	/* INSERT YOUR CODE HERE -START- */						// 9) of HOW TO MAKE A SPECIAL FUNCTION

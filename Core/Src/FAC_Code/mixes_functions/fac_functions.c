@@ -62,9 +62,42 @@ void FAC_functions_SET_output(uint8_t functionNumber, float outputValue) {
 }
 
 /*
+ * @brief		Take the input value of a single special function and calculate its normalized value
+ * @IMPORTANT	!!!! MUST BE CALLED BEFORE READING THE INPUT OF THAT FUNCTION !!!!
+ * @note		A special function has exactly one input, so only its own slot has to be refreshed.
+ * 				Refreshing all of them was the very same work repeated for every linked function
+ * @note		functionNumber is 0 based, an out of range index is ignored, and a disabled slot
+ * 				(input channel 0) is reset to 0.0f to not leave a stale value behind
+ */
+void FAC_functions_update_input(uint8_t functionNumber) {
+	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
+		return;
+
+	uint8_t chNumber = FAC_functions_GET_input_channel_number(functionNumber);// get channel number corresponding to the input evaluated
+
+	if (chNumber != 0) {	// if this channel is valid
+		uint16_t rxValue = FAC_std_receiver_GET_channel(chNumber);
+		/* map the channel value to make it standard [-1.0 to 1.0]
+		 * this is the same affine map that map_float(chValue, 0, 1, -1, 1) was doing on the
+		 * channel ratio, written as 2*rx/res - 1 == (2*rx - res)/res: on a mcu without fpu every
+		 * float operation is a library call, and doing it this way costs two of them instead of
+		 * the ten the previous version needed for each input of each slot */
+		float inputValue = (float) ((int32_t) rxValue * 2
+				- RECEIVER_CHANNEL_RESOLUTION)
+				/ (float) RECEIVER_CHANNEL_RESOLUTION;
+
+		FAC_functions_SET_input(functionNumber, inputValue);// store the value into the struct array (where all mixes will take them)
+	} else {
+		FAC_functions_SET_input(functionNumber, 0.0f);	// disabled slot, do not leave a stale value behind
+	}
+}
+
+/*
  * @brief		Take all the input value and calculate the normalized value
  * @IMPORTANT	!!!! MUST BE CALLED AFTER EACH CALL OF THE FUCTIONS UPDATE !!!!
  * @note		take in input the settings input array from settings
+ * @note		A special function only needs its own slot, see FAC_functions_update_input: this one
+ * 				is for the code that really has to refresh every slot at once
  */
 void FAC_functions_update_inputs(void) {
 //	for (int i = 0; i < SPECIAL_FUNCITONS_NUMBER; i++) {
@@ -79,23 +112,7 @@ void FAC_functions_update_inputs(void) {
 //		}
 //	}
 	for (int i = 0; i < SPECIAL_FUNCITONS_NUMBER; i++) {
-		uint8_t chNumber = FAC_functions_GET_input_channel_number(i);	// get channel number corresponding to the input evaluated
-
-		if (chNumber != 0) {	// if this channel is valid
-			uint16_t rxValue = FAC_std_receiver_GET_channel(chNumber);
-			/* map the channel value to make it standard [-1.0 to 1.0]
-			 * this is the same affine map that map_float(chValue, 0, 1, -1, 1) was doing on the
-			 * channel ratio, written as 2*rx/res - 1 == (2*rx - res)/res: on a mcu without fpu every
-			 * float operation is a library call, and doing it this way costs two of them instead of
-			 * the ten the previous version needed for each input of each slot */
-			float inputValue = (float) ((int32_t) rxValue * 2
-					- RECEIVER_CHANNEL_RESOLUTION)
-					/ (float) RECEIVER_CHANNEL_RESOLUTION;
-
-			FAC_functions_SET_input(i, inputValue);	// store the value into the struct array (where all mixes will take them)
-		} else {
-			FAC_functions_SET_input(i, 0.0f);	// disabled slot, do not leave a stale value behind
-		}
+		FAC_functions_update_input(i);
 	}
 }
 
