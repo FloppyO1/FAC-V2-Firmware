@@ -11,6 +11,13 @@
 #ifdef DEBUG
 //#define IM_TESTING_FAC_TOOL			// if this is defined the target use only the mcu and eeprom, used for testing settings and nothing else.
 //#define SERIAL_DEBUG	// activate the serial debug prints
+
+/* DEBUG UTILS */
+// comment and uncomment to activate debug utils functions
+#define DEBUG_UTILS
+#ifdef DEBUG_UTILS
+#define FUNCTION_CLONOMETER
+#endif
 #endif
 
 /* FIRMWARE VERSION */
