@@ -38,7 +38,7 @@ The code is organised in layers, each in its own module under `Core/Src/FAC_Code
 | Device drivers | `fac_motors`, `fac_servo` | Apply outputs to hardware |
 | Input | `fac_std_receiver`, `fac_pwm_receiver`, `fac_ppm_receiver` | Decode the RC link |
 | Sensors | `fac_adc`, `fac_battery`, `fac_imu` | Voltage and motion sensing |
-| Support | `Libraries/DMApwm`, `Libraries/LSM6DS3`, `jingles/` | Soft-PWM engine, IMU driver, startup melodies |
+| Support | `Libraries/DMApwm`, `Libraries/LSM6DS3`, `jingles/`, `fac_debug_utils` | Soft-PWM engine, IMU driver, startup melodies, on-target profiling |
 
 **Naming conventions.** All public symbols are prefixed `FAC_<module>_`. An **uppercase** `GET_` / `SET_` marks a plain accessor; setters are usually `static`, because modules expose behaviour rather than state. Each module keeps its state in a single `static` struct instance.
 
@@ -55,6 +55,7 @@ The code is organised in layers, each in its own module under `Core/Src/FAC_Code
 | TIM1 + DMA → `GPIOA->BSRR` | Soft-PWM engine for the 6 motor pins |
 | TIM2 | Free-running 32-bit counter, 0.5 µs/tick — RC pulse timing |
 | TIM3 CH3/CH4 | Hardware PWM for SERVO1 / SERVO2 |
+| TIM6 | 1 µs/tick free-running counter — the profiling cronometer, `DEBUG` builds only |
 | ADC + DMA | VBAT, ADC_AUX, VREFINT (3-channel scan) |
 | I2C1 | EEPROM (`0xA0`) and LSM6DS3 IMU (`0x6A`) |
 | USB FS (CDC) | Configuration and telemetry link to the FAC Tool |
@@ -702,6 +703,32 @@ int32_t     FAC_math_atan2(int32_t y, int32_t x);        // 6 divisions — full
 Measured against the real functions over a whole turn: `sin`/`cos` within 2 units out of 1000 (0.2 %) and exact at the quadrant points; `atan2` within 2 angle units, i.e. 0.18°.
 
 **Cost model**: the M0 has no hardware divider and no long multiply, so the compiler cannot fold a constant `/1000` into a multiply-and-shift — even that becomes an `__aeabi_idiv` call. The division counts above are exact for each primitive; `clamp`/`abs`/`add`/`sub`/`min`/`max`/`clamp_to`/`angle_wrap` cost none, which is why a mix built only out of those (the simple tank mix, for instance) costs **no division at all**.
+
+---
+
+### 8.19 `fac_debug_utils` — on-target profiling
+
+```c
+void     FAC_debug_utils_crono_init (void);
+void     FAC_debug_utils_crono_start(void);
+uint16_t FAC_debug_utils_crono_stop (void);   // elapsed microseconds, 0 on overflow
+```
+
+Compiled only when `DEBUG_UTILS` and `FUNCTION_CLONOMETER` are defined in `config.h`, which are themselves inside `#ifdef DEBUG` — a Release build contains none of this.
+
+A stopwatch built on **TIM6**, configured by CubeMX as a free-running 16-bit counter at 1 MHz, so **one tick is 1 µs** and the longest interval it can measure is **65 535 µs**. `crono_start()` stops any measurement still running, clears the counter *and the update flag*, then starts the timer; `crono_stop()` reads the counter, stops the timer, and returns the elapsed time — or **`0` if TIM6 overflowed**, meaning the block took longer than 65.5 ms. Clearing the update flag on every start is what keeps a single overflow from poisoning every later measurement.
+
+| Function | Description |
+|---|---|
+| `FAC_debug_utils_crono_init` | Stops and clears TIM6. Called once from `FAC_app_init()`. |
+| `FAC_debug_utils_crono_start` | Begins a measurement. **Not reentrant** — there is one counter, so a measurement started inside another one resets it and both results are wrong. |
+| `FAC_debug_utils_crono_stop` | Ends it and returns microseconds, `0` on overflow. |
+
+**How it is used.** The measurement points live in the code they measure, each behind its own switch in `config.h` (`CRONOMETER_ENTIRE_FAC_APP`, `CRONOMETER_FAC_APP`, `CRONOMETER_FAC_MAPPER`), and write into `static volatile uint16_t` file-scope variables meant to be watched live from the debugger. `volatile` is not about concurrency here: without it, `-O3` deletes a variable that is only ever written. A compile-time check in `config.h` counts how many switches are enabled and raises `#error` on more than one, since nesting two measurements silently corrupts both.
+
+Each block accumulates into plain locals and publishes to the `volatile` variables only at the end of the function, so a live-watch read never catches a value mid-update. The totals are **sums of the measured parts**, not a single enclosing measurement — the counter cannot do both at once — and every part carries the few microseconds of `start`/`stop` overhead.
+
+This module is what produced the numbers behind the optimization work: it is how the soft-PWM buffer rewrite was identified as 56 % of the mapper, rather than guessed at.
 
 ---
 
