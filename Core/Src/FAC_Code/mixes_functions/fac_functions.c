@@ -82,10 +82,15 @@ void FAC_functions_update_inputs(void) {
 		uint8_t chNumber = FAC_functions_GET_input_channel_number(i);	// get channel number corresponding to the input evaluated
 
 		if (chNumber != 0) {	// if this channel is valid
-			uint16_t receiverResolution = RECEIVER_CHANNEL_RESOLUTION;
 			uint16_t rxValue = FAC_std_receiver_GET_channel(chNumber);
-			float chValue = (float) (rxValue) / (float) (receiverResolution);	// get the receiver channel value
-			float inputValue = map_float(chValue, 0.0f, 1.0f, -1.0f, 1.0f); // map the channel value to make it standard [-1.0 to 1.0]
+			/* map the channel value to make it standard [-1.0 to 1.0]
+			 * this is the same affine map that map_float(chValue, 0, 1, -1, 1) was doing on the
+			 * channel ratio, written as 2*rx/res - 1 == (2*rx - res)/res: on a mcu without fpu every
+			 * float operation is a library call, and doing it this way costs two of them instead of
+			 * the ten the previous version needed for each input of each slot */
+			float inputValue = (float) ((int32_t) rxValue * 2
+					- RECEIVER_CHANNEL_RESOLUTION)
+					/ (float) RECEIVER_CHANNEL_RESOLUTION;
 
 			FAC_functions_SET_input(i, inputValue);	// store the value into the struct array (where all mixes will take them)
 		} else {
