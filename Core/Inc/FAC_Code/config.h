@@ -22,8 +22,8 @@
 // comment and uncomment to choose which file is measured
 // !! ONLY ONE AT A TIME !! the cronometer has a single TIM6 counter, so a measure started inside
 // another one resets it and both the results are wrong
-//#define CLONOMETER_FAC_APP		// blocks of FAC_app_main_loop (the states of the app)
-#define CLONOMETER_FAC_MAPPER		// blocks of FAC_mapper_apply_to_devices (mix update and devices)
+#define CLONOMETER_FAC_APP		// blocks of FAC_app_main_loop (the states of the app)
+//#define CLONOMETER_FAC_MAPPER		// blocks of FAC_mapper_apply_to_devices (mix update and devices)
 
 #if defined(CLONOMETER_FAC_APP) && defined(CLONOMETER_FAC_MAPPER)
 #error "Cronometer measures cannot be nested: enable only one CLONOMETER_* at a time"

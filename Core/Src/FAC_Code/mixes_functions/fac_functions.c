@@ -94,10 +94,14 @@ void FAC_functions_update_input(uint8_t functionNumber) {
 
 /*
  * @brief		Take all the input value and calculate the normalized value
- * @IMPORTANT	!!!! MUST BE CALLED AFTER EACH CALL OF THE FUCTIONS UPDATE !!!!
+ * @IMPORTANT	!! NOT USED BY THE FIRMWARE, IT HAS NO CALLER !!
+ * 				A special function has exactly one input, so its boilerplate calls
+ * 				FAC_functions_update_input() with its own slot. Refreshing all the slots on every
+ * 				function was the same work repeated once per linked function, which is why it was
+ * 				dropped from the boilerplate
+ * @note		Kept available on purpose, for a future function that has to read more than its own
+ * 				slot: in that case call this one before reading the inputs of the other slots
  * @note		take in input the settings input array from settings
- * @note		A special function only needs its own slot, see FAC_functions_update_input: this one
- * 				is for the code that really has to refresh every slot at once
  */
 void FAC_functions_update_inputs(void) {
 //	for (int i = 0; i < SPECIAL_FUNCITONS_NUMBER; i++) {

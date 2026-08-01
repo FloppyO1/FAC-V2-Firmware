@@ -43,8 +43,8 @@ enum FAC_SPECIAL_FUNCTIONS_ID {		// 8) of HOW TO MAKE A SPECIAL FUNCTION
 float FAC_functions_GET_output(uint8_t functionNumber);
 float FAC_functions_GET_input(uint8_t functionNumber);
 void FAC_functions_SET_output(uint8_t functionNumber, float outputValue);
-void FAC_functions_update_input(uint8_t functionNumber);
-void FAC_functions_update_inputs(void);
+void FAC_functions_update_input(uint8_t functionNumber);	// refresh one slot, used by the functions boilerplate
+void FAC_functions_update_inputs(void);	// refresh all the slots, NOT USED, kept for a function that needs more than its own
 void FAC_functions_update(uint8_t sFunctionID);
 void FAC_functions_init(void);
 
