@@ -20,6 +20,23 @@
 #include "jingles/fac_jingles.h"
 #include "FAC_Code/fac_imu.h"
 
+#ifdef DEBUG_UTILS
+#include "FAC_Code/fac_debug_utils.h"
+
+#ifdef CLONOMETER_FAC_APP
+/* EXECUTION TIMES OF THE MAIN LOOP BLOCKS, IN MICROSECONDS (0 MEANS OVERFLOW, SEE FAC_debug_utils_crono_stop) */
+// they are volatile only to keep the optimizer from removing them: nothing reads them, they are meant
+// to be watched from the debugger while the robot is running
+static volatile uint16_t com_serial_execution_time = 0;	// USB command handling, it does blocking EEPROM writes
+static volatile uint16_t mapper_execution_time = 0;		// mixes + special functions + write to motors and servos
+static volatile uint16_t arming_check_execution_time = 0;// settings read + receiver channel read
+static volatile uint16_t battery_check_execution_time = 0;// adc readings + float math of the cell voltage
+static volatile uint16_t cut_off_check_execution_time = 0;// settings reads + tick comparisons
+static volatile uint16_t status_led_execution_time = 0;	// gpio handling of the status led
+static volatile uint16_t normal_state_execution_time = 0;// sum of the blocks of FAC_STATE_NORMAL measured above
+#endif
+#endif
+
 static FAC_App fac_application;
 uint8_t newComSerialReceived = FALSE;	// turn true when something is received
 
@@ -55,7 +72,14 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
 //	HAL_GPIO_TogglePin(DIGITAL_AUX1_GPIO_Port, DIGITAL_AUX1_Pin);	// used to see the time of execution
 	if (newComSerialReceived) {		//	1us
 		// understand the command received and do what you have to do
+#ifdef CLONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
 		FAC_settings_command_response();
+#ifdef CLONOMETER_FAC_APP
+		// a save command writes the eeprom, 10ms per byte, so here the cronometer overflows and returns 0
+		com_serial_execution_time = FAC_debug_utils_crono_stop();
+#endif
 
 		newComSerialReceived = FALSE;
 	}
@@ -110,9 +134,18 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
 	}
 	case FAC_STATE_NORMAL: {
 		/* UPDATE THE MAPPED MOTORS AND SERVOS */   // 8ms max
+#ifdef CLONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
 		FAC_mapper_apply_to_devices();
+#ifdef CLONOMETER_FAC_APP
+		mapper_execution_time = FAC_debug_utils_crono_stop();
+#endif
 
 		/* CHECK ARMING CHANNEL IF USED */	// 800us max
+#ifdef CLONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
 		uint8_t armingCh = FAC_settings_GET_value(
 				FAC_SETTINGS_CODE_ARMING_CHANNEL);
 		if (armingCh != 0) {
@@ -122,9 +155,16 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
 				FAC_app_SET_current_state(FAC_STATE_DISARMED);
 			}
 		}
+#ifdef CLONOMETER_FAC_APP
+		// the receiver channel is recalculated here only if the mapper did not already ask for it
+		arming_check_execution_time = FAC_debug_utils_crono_stop();
+#endif
 
 		/* LOW BATTERY DETECTOR */		// 200us
 		/* both thresholds (low battery and cut off) are per cell values, so they are compared against Vcell */
+#ifdef CLONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
 		uint16_t vcell = FAC_battery_GET_cell_voltage();
 		uint8_t batteryType = FAC_app_GET_battery_type();
 
@@ -135,8 +175,16 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
 							FAC_SETTINGS_CODE_LOW_BATTERY_VOLTAGE_MV))// if the cell voltage is below the low battery thershold
 				FAC_app_SET_is_low_battery(TRUE);
 		}
+#ifdef CLONOMETER_FAC_APP
+		// FAC_battery_GET_cell_voltage averages 5 adc readings with float math on a mcu without fpu,
+		// and it is called on every loop even if the battery cannot change that fast
+		battery_check_execution_time = FAC_debug_utils_crono_stop();
+#endif
 
 		/* CUT OFF DETECTION */		// 8us
+#ifdef CLONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
 		static uint32_t timerCutOff = 0;
 		uint16_t cutOffThreshold = FAC_settings_GET_value(
 				FAC_SETTINGS_CODE_CUTOFF_VOLTAGE_MV);
@@ -152,8 +200,14 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
 						FAC_SETTINGS_CODE_CUTOFF_DETECTION_TIME) * 1000) {
 			FAC_app_SET_current_state(FAC_STATE_CUTOFF);
 		}
+#ifdef CLONOMETER_FAC_APP
+		cut_off_check_execution_time = FAC_debug_utils_crono_stop();
+#endif
 
 		/* STATUS LED */
+#ifdef CLONOMETER_FAC_APP
+		FAC_debug_utils_crono_start();
+#endif
 		static uint32_t timerLowBattery = 0;
 		if (FAC_app_GET_is_low_battery()) {
 			if (HAL_GetTick() - timerLowBattery > LOW_BATTERY_LED_PERIOD / 2) {
@@ -163,6 +217,15 @@ void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple 
 		} else {
 			HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);// if no low battery detected the led will be always on
 		}
+#ifdef CLONOMETER_FAC_APP
+		status_led_execution_time = FAC_debug_utils_crono_stop();
+
+		/* the cronometer has a single counter, so the whole state cannot be measured while its blocks
+		 * are, the total is the sum of the parts (the start/stop overhead is counted in every part) */
+		normal_state_execution_time = mapper_execution_time
+				+ arming_check_execution_time + battery_check_execution_time
+				+ cut_off_check_execution_time + status_led_execution_time;
+#endif
 
 		break;
 	}
@@ -215,6 +278,10 @@ void FAC_app_init(void) {
 	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
 	HAL_Delay(300);
 	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
+
+#ifdef FUNCTION_CLONOMETER
+	FAC_debug_utils_crono_init();	// not under CLONOMETER_FAC_APP, every measurement point needs it
+#endif
 
 	FAC_adc_Init();
 	FAC_battery_init();

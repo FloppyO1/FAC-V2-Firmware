@@ -36,22 +36,78 @@ extern DMA_HandleTypeDef hdma_tim1_up;
 static uint32_t dataA[PWM_STEPS];
 //static uint32_t dataB[PWM_STEPS]; // not used this time
 
-static void setSoftPWM(uint16_t pin, uint32_t duty, uint32_t *softpwmbuffer) {	// no external use
-	for (uint32_t i = 0; i < PWM_STEPS; ++i) {
-		if (i < duty) { //set pin
-			softpwmbuffer[i] &= (uint32_t) ~(pin << 16);
-			softpwmbuffer[i] |= (uint32_t) pin;
-		} else { //reset pin
-			softpwmbuffer[i] &= (uint32_t) ~(pin);
-			softpwmbuffer[i] |= (uint32_t) pin << 16;
-		}
-	}
+/* LAST DUTY WRITTEN ON EVERY PIN OF THE PORT */
+// the buffer keeps the duty of every pin, so rewriting all of it on each call means writing again
+// the same values: the last duty is cached to rewrite only what really changes (see setSoftPWM)
+// !! PORT A ONLY, like the rest of this file: enabling port B needs its own cache and valid mask !!
+static uint16_t lastDutyA[GPIO_PINS_NUMBER];
+static uint16_t lastDutyValidA = 0;	// one bit per pin, 0 means the cached duty cannot be trusted
+
+/*
+ * @brief	Convert a single pin mask (GPIO_PIN_x) into its bit position
+ * @note	Cortex-M0 has no CLZ instruction, so the position is searched with a loop: at most 16
+ * 			iterations, nothing compared to the buffer writes this lookup allows to avoid
+ * @retval	the pin position [0, GPIO_PINS_NUMBER-1], GPIO_PINS_NUMBER if the mask holds no pin
+ */
+static uint8_t pinToIndex(uint16_t pin) {
+	uint8_t index = 0;
+	while (index < GPIO_PINS_NUMBER && !(pin & (uint16_t) (1u << index)))
+		index++;
+	return index;
 }
 
+/*
+ * @brief	Apply a duty to a pin writing on the buffer only the entries that really change
+ * @note	Every entry of the buffer is a BSRR word: the low half sets the pin, the high half resets
+ * 			it. The entries below the duty keep the pin high, the others keep it low, so changing the
+ * 			duty only moves that boundary: the entries between the old and the new duty are the only
+ * 			ones that need to be touched, and an unchanged duty costs nothing at all
+ * @note	The first write of a pin, and the first one after a zeroSoftPWM, has no usable old duty,
+ * 			so the whole buffer is written and the pin is marked as cached
+ * @IMPORTANT	The DMA reads this buffer while it is written. That was already the case before, and
+ * 				it stays safe because each entry is updated with a single word store
+ */
+static void setSoftPWM(uint16_t pin, uint32_t duty, uint32_t *softpwmbuffer) {	// no external use
+	uint8_t pinIndex = pinToIndex(pin);
+	if (pinIndex >= GPIO_PINS_NUMBER)
+		return;	// not a valid single pin mask, there is nothing to write
+
+	if (duty > PWM_STEPS)
+		duty = PWM_STEPS;	// the loops below index the buffer with the duty, out of range would overflow it
+
+	const uint32_t setMask = (uint32_t) pin;			// BSRR low half, the pin goes high
+	const uint32_t resetMask = (uint32_t) pin << 16;	// BSRR high half, the pin goes low
+
+	if (!(lastDutyValidA & (uint16_t) (1u << pinIndex))) {	// no usable old duty, write the whole buffer
+		for (uint32_t i = 0; i < PWM_STEPS; ++i) {
+			if (i < duty)	// set pin
+				softpwmbuffer[i] = (softpwmbuffer[i] & ~resetMask) | setMask;
+			else	// reset pin
+				softpwmbuffer[i] = (softpwmbuffer[i] & ~setMask) | resetMask;
+		}
+		lastDutyValidA |= (uint16_t) (1u << pinIndex);
+	} else {
+		uint32_t oldDuty = lastDutyA[pinIndex];
+		if (duty > oldDuty) {	// the pin stays high longer, set the entries in between
+			for (uint32_t i = oldDuty; i < duty; ++i)
+				softpwmbuffer[i] = (softpwmbuffer[i] & ~resetMask) | setMask;
+		} else {	// the pin stays high less, reset the entries in between (equal duty = no iteration)
+			for (uint32_t i = duty; i < oldDuty; ++i)
+				softpwmbuffer[i] = (softpwmbuffer[i] & ~setMask) | resetMask;
+		}
+	}
+	lastDutyA[pinIndex] = (uint16_t) duty;
+}
+
+/*
+ * @brief	Clear the whole buffer, no pin is driven anymore
+ * @IMPORTANT	It throws away what the duty cache describes, so the cache must be invalidated with it
+ */
 static void zeroSoftPWM(uint32_t softpwmbuffer[]) {
 	for (uint32_t i = 0; i < PWM_STEPS; ++i) {
 		softpwmbuffer[i] = 0;
 	}
+	lastDutyValidA = 0;	// the buffer no longer holds the cached duties, force a full rewrite
 }
 
 /*

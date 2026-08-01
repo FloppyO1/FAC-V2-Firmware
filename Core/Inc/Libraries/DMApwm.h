@@ -25,6 +25,7 @@
 #define PWM_STEPS MOTOR_SPEED_RESOLUTION
 // freq is given by tim_freq/ARR/lengthSoftPWMbuffer
 #define TIMER_FREQ 48000000	// freq at which timers are running [Hz]
+#define GPIO_PINS_NUMBER 16	// pins of a gpio port, the duty cache has one entry for each of them
 
 
 // only for code, easier to read
