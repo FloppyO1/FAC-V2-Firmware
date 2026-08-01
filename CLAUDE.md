@@ -121,7 +121,7 @@ Step 3's `mix_id` / `first_special_function_id` is a **documentation marker only
 
 ## Known issues
 
-The list found during the API documentation pass is now **closed**: #1–#4, #6, #7 and #9–#17 are fixed, #5 was withdrawn as a misdiagnosis. Full descriptions, with the mechanism and the fix applied to each, in [README_API.md § 11](docs/README_API.md#11-known-issues). **Numbering is stable** — a closed issue keeps its number and moves to [§ 11.1 Fixed](docs/README_API.md#111-fixed) or [§ 11.2 Withdrawn](docs/README_API.md#112-withdrawn-not-bugs); never renumber the others.
+The list found during the API documentation pass is now **closed**: #1–#4, #6, #7 and #9–#18 are fixed, #5 was withdrawn as a misdiagnosis. Full descriptions, with the mechanism and the fix applied to each, in [README_API.md § 11](docs/README_API.md#11-known-issues). **Numbering is stable** — a closed issue keeps its number and moves to [§ 11.1 Fixed](docs/README_API.md#111-fixed) or [§ 11.2 Withdrawn](docs/README_API.md#112-withdrawn-not-bugs); never renumber the others.
 
 Lesson worth keeping: that list was a set of *suspicions*, not verified defects. Issue #5 turned out to be a misreading of working code and "fixing" it would have broken the jingles, while #17 — the only one with a real safety consequence left — was found by reading the code around #8, not from the list. Confirm the mechanism, and ask the user (who has the hardware) before changing behaviour.
 
@@ -130,8 +130,7 @@ Lesson worth keeping: that list was a set of *suspicions*, not verified defects.
 
 Verified as *not* problems: the `settings[]` table and `enum FAC_SETTINGS_CODE` match exactly (64 entries, same order).
 
-Still open, found later and **not** yet addressed:
-- `fac_mapper.c` `FAC_mapper_apply_to_devices()` iterates with `for (int i = 0; i < sizeof(links); i++)` over `uint8_t links[5]`. Correct only because the element size is 1 — widening the array's type would silently overrun it.
+Nothing else is open: #8 above is the only outstanding item, and it is a feature to write rather than a defect.
 
 ## Debug switches (`Core/Inc/FAC_Code/config.h`, `DEBUG` builds only)
 

@@ -115,7 +115,7 @@ void FAC_mapper_apply_to_devices() {
 		functionsUpdated[i] = FALSE;
 
 	/* UPDATE ALL OUTPUTS OF THE MIX AND ACTIVE SPECIAL FUNCTIONS */
-	for (int i = 0; i < sizeof(links); i++) {		// check and update the active functions/mix
+	for (int i = 0; i < sizeof(links) / sizeof(links[0]); i++) {	// check and update the active functions/mix
 		if (links[i] / 100 == 1 && !mixUpdated) {	// if the device is linked to the mix and it is not already been calculated
 			FAC_mix_update();	// update the outputs values of the mix/* DC MOTOR 1*/
 			mixUpdated = TRUE;	// to not calculate it again

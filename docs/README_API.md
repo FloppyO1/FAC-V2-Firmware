@@ -713,12 +713,6 @@ The original list is now closed. What remains is one enum entry whose feature wa
 |---|---|---|---|
 | 8 | **Not a defect** | `fac_functions.c` | `FAC_SPECIAL_FUNCTION_DC_SERVO_1ST/2ND/3RD` are declared in the enum and reachable via the mapper (`200+8` … `200+10`), but have no `case` in `FAC_functions_update()`, so they output a constant `0.0f`. The DC-servo function was simply never implemented — this is a feature to write, not a bug to fix. The read stays in bounds (the outputs array holds 20 entries). |
 
-Found later, outside the original list, and **not** addressed:
-
-| Location | Issue |
-|---|---|
-| `fac_mapper.c` `FAC_mapper_apply_to_devices()` | Iterates with `for (int i = 0; i < sizeof(links); i++)` over `uint8_t links[5]`. Correct only because the element size happens to be 1 byte; widening the array's type would silently overrun it. |
-
 ### 11.1 Fixed
 
 | # | Severity | Location | Issue | Fix |
@@ -738,6 +732,7 @@ Found later, outside the original list, and **not** addressed:
 | 15 | **Info** | `fac_motors.h`, `fac_servo.h` | `FAC_motor_GET_*` and `FAC_servo_GET_servo_freq()` were non-static but absent from the headers — unusable without a manual `extern`. | Declared in their headers, matching the other modules (`fac_servo`, `fac_battery` and `fac_app` all expose their `GET_` accessors). `FAC_motor_GET_reverse()` also returned `uint16_t` for a `uint8_t` field; it now returns `uint8_t`. |
 | 16 | **Info** | `fac_battery.h` | `FAC_battery_GET_voltage()` and `FAC_battery_SET_calibration_offset()` were each declared twice; `FAC_battery_GET_type()` returned `uint16_t` for a `uint8_t` value. | Duplicates removed, return type narrowed to `uint8_t` in both the header and `fac_battery.c`. Callers were already assigning it to `uint8_t`. |
 | 17 | **Medium** | `fac_mapper.c`, `fac_mixes.c`, `fac_functions.c` | Found while investigating #8, not part of the original list. The mapper settings have a single range of `0…210`, but only `100…109` (mix outputs) and `200…210` (function outputs) decode to something real. A value in **`110…199`** passed validation, entered the mix branch, and produced `FAC_mixes_GET_output(10…99)` — up to 90 floats read past the end of a 10-element array. The garbage float became a motor speed (`\|val\| × 1000`, then clamped to `MAX_DMA_PWM_VALUE`), so a mapper value of e.g. 150 could **spin a motor at full speed** in an arbitrary direction, and the value persisted to EEPROM. | `FAC_mixes_GET_output/_GET_input` and `FAC_functions_GET_output/_GET_input/_SET_output` bounds-check their index and return `0.0f` (or ignore the write) when it is out of range, so an invalid link resolves to "no output" for every caller. `FAC_mapper_apply_to_devices()` additionally guards its `functionsUpdated[]` index. The settings range is unchanged — it cannot express a gap, which is why the check belongs in the accessors. |
+| 18 | **Info** | `fac_mapper.c` `FAC_mapper_apply_to_devices()` | Found later, outside the original list. The loop over the link array used `for (int i = 0; i < sizeof(links); i++)` on `uint8_t links[5]`, i.e. a **byte count** used as an element count. Correct only because the element size happens to be 1 byte; changing the array's type to anything wider would silently iterate past its end and read `functionsUpdated[]` indices out of a stale stack. | The element count is now explicit: `i < sizeof(links) / sizeof(links[0])`, the same idiom already used in `DMApwm.c`. Same 5 iterations today, but correct for any element type. |
 
 ### 11.2 Withdrawn (not bugs)
 
