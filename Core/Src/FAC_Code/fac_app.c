@@ -345,26 +345,38 @@ void FAC_app_init_all_modules(void) {
  * 				so every division is a library routine, and the 64 bit one is far longer than the
  * 				32 bit one. All the values handled by the firmware (channel counts, speeds, servo
  * 				positions) stay well below the limit: the widest product in use is about 4*10^6
+ * @note		x is clamped inside [in_min, in_max], so the result never leaves the output range,
+ * 				the same way map_float already behaved
  * @IMPORTANT	Keep (x - in_min) * (out_max - out_min) below 2^32 or the result wraps around
  * @retval 		return the value in the new range
  */
 uint32_t map_uint32(uint32_t x, uint32_t in_min, uint32_t in_max,
 		uint32_t out_min, uint32_t out_max) {
+	if (in_max == in_min)
+		return out_min;	// empty input range, there is nothing to divide by
 	if (x > in_max)
 		x = in_max;
+	if (x < in_min)
+		x = in_min;	// on unsigned math an x below in_min would underflow (x - in_min) to a huge value
 	return (((x - in_min) * (out_max - out_min)) / (in_max - in_min) + out_min);
 }
 
 /**
  * @brief 		change the range of a variable from one to another
  * @note		The intermediate product is calculated on 32 bit, see map_uint32 for the reason
+ * @note		x is clamped inside [in_min, in_max], so the result never leaves the output range,
+ * 				the same way map_float already behaved
  * @IMPORTANT	Keep (x - in_min) * (out_max - out_min) inside the int32_t range or the result overflows
  * @retval 		return the value in the new range
  */
 int32_t map_int32(int32_t x, int32_t in_min, int32_t in_max, int32_t out_min,
 		int32_t out_max) {
+	if (in_max == in_min)
+		return out_min;	// empty input range, there is nothing to divide by
 	if (x > in_max)
 		x = in_max;
+	if (x < in_min)
+		x = in_min;	// keep the result inside [out_min, out_max] instead of extrapolating below it
 	return (((x - in_min) * (out_max - out_min)) / (in_max - in_min) + out_min);
 }
 
