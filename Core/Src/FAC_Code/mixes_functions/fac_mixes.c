@@ -18,10 +18,10 @@
 static Mixes mixes;
 /* STATIC FUNCTION PROTORYPES */
 static void FAC_mixes_SET_current_mix(uint8_t currentMix);
-static void FAC_mixes_SET_input(uint8_t inputNumber, float inputValue);
+static void FAC_mixes_SET_input(uint8_t inputNumber, fac_value_t inputValue);
 static void FAC_mixes_SET_input_channel_number(uint8_t inputNumber,
 		uint8_t inputChannel);
-static void FAC_mixes_SET_output(uint8_t outputNumber, float value);
+static void FAC_mixes_SET_output(uint8_t outputNumber, fac_value_t value);
 static void FAC_mixes_SET_input_reversed(uint8_t inputNumber,
 		uint8_t isReversed);
 static uint8_t FAC_mixes_GET_current_mix(void);
@@ -37,7 +37,7 @@ static void FAC_mixes_SET_current_mix(uint8_t currentMix) {
 	mixes.current_mix = currentMix;
 }
 
-static void FAC_mixes_SET_input(uint8_t inputNumber, float inputValue) {
+static void FAC_mixes_SET_input(uint8_t inputNumber, fac_value_t inputValue) {
 	mixes.mix_input[inputNumber] = inputValue;
 }
 
@@ -46,7 +46,7 @@ static void FAC_mixes_SET_input_channel_number(uint8_t inputNumber,
 	mixes.mix_input_channels_number[inputNumber] = inputChannel;
 }
 
-static void FAC_mixes_SET_output(uint8_t outputNumber, float value) {
+static void FAC_mixes_SET_output(uint8_t outputNumber, fac_value_t value) {
 	mixes.mix_output[outputNumber] = value;
 }
 
@@ -71,19 +71,19 @@ static uint8_t FAC_mixes_GET_input_reversed(uint8_t inputNumber) {
 
 /*
  * @brief	Get one of the outputs produced by the active mix
- * @note	outputNumber is 0 based, an out of range index returns 0.0f. The mapper link value
+ * @note	outputNumber is 0 based, an out of range index returns FAC_VALUE_ZERO. The mapper link value
  * 			(100+i) is only range checked against the settings table, which cannot express
  * 			"100..109 or 200..210", so an invalid index can reach here
  */
-float FAC_mixes_GET_output(uint8_t outputNumber) {
+fac_value_t FAC_mixes_GET_output(uint8_t outputNumber) {
 	if (outputNumber >= MIXES_MAX_OUTPUTS_NUMBER)
-		return 0.0f;
+		return FAC_VALUE_ZERO;
 	return mixes.mix_output[outputNumber];
 }
 
-float FAC_mixes_GET_input(uint8_t inputNumber) {
+fac_value_t FAC_mixes_GET_input(uint8_t inputNumber) {
 	if (inputNumber >= MIXES_MAX_INPUTS_NUMBER)
-		return 0.0f;
+		return FAC_VALUE_ZERO;
 	return mixes.mix_input[inputNumber];
 }
 
@@ -92,7 +92,7 @@ float FAC_mixes_GET_input(uint8_t inputNumber) {
  * @IMPORTANT	!!!! MUST BE CALLED AFTER EACH CALL OF THE MIX UPDATE !!!!
  * @note		this function will not modify the value of the single mix output array
  */
-void FAC_mixes_update_mix_outputs(float mix_output[]) {
+void FAC_mixes_update_mix_outputs(fac_value_t mix_output[]) {
 	for (int i = 0; i < MIXES_MAX_OUTPUTS_NUMBER; i++) {
 		FAC_mixes_SET_output(i, mix_output[i]);
 	}
@@ -109,22 +109,18 @@ void FAC_mixes_update_mix_inputs(void) {
 
 		if (chNumber != 0) {	// if this channel is valid
 			uint16_t rxValue = FAC_std_receiver_GET_channel(chNumber);
-			/* map the channel value to make it standard [-1.0 to 1.0]
-			 * this is the same affine map that map_float(chValue, 0, 1, -1, 1) was doing on the
-			 * channel ratio, written as 2*rx/res - 1 == (2*rx - res)/res: on a mcu without fpu every
-			 * float operation is a library call, and doing it this way costs two of them instead of
-			 * the ten the previous version needed for each input of each slot */
-			float inputValue = (float) ((int32_t) rxValue * 2
-					- RECEIVER_CHANNEL_RESOLUTION)
-					/ (float) RECEIVER_CHANNEL_RESOLUTION;
+			/* bring the channel into the normalized scale of fac_math.h: with both resolutions
+			 * equal to 1000 this resolves to the exact 2*rx - 1000, and no float is involved */
+			fac_value_t inputValue = FAC_math_from_range(rxValue, 0,
+			RECEIVER_CHANNEL_RESOLUTION);
 
 			// reverse input if it is reversed (cached by init(), like the input channel number)
 			if (FAC_mixes_GET_input_reversed(i))
-				inputValue = inputValue * (-1.0f);
+				inputValue = -inputValue;
 
 			FAC_mixes_SET_input(i, inputValue);	// store the value into the struct array (where all mixes will take them)
 		}else{
-			FAC_mixes_SET_input(i, 0.0f);
+			FAC_mixes_SET_input(i, FAC_VALUE_ZERO);
 		}
 	}
 }
@@ -166,11 +162,11 @@ void FAC_mixes_init(void) {
 		FAC_mixes_SET_input_reversed(i,
 				FAC_settings_GET_value(
 						FAC_SETTINGS_CODE_MIX_INPUT1_REVERSED + i));
-		mixes.mix_input[i] = 0.0f;
+		mixes.mix_input[i] = FAC_VALUE_ZERO;
 	}
 
 	for (int i = 0; i < MIXES_MAX_OUTPUTS_NUMBER; i++) {// set all output to 0 and set them to non reversed
-		mixes.mix_output[i] = 0;
+		mixes.mix_output[i] = FAC_VALUE_ZERO;
 	}
 }
 

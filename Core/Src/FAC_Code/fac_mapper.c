@@ -59,10 +59,10 @@ static volatile uint16_t mapper_total_execution_time = 0;// sum of all the block
  * @brief	According to the output value of the linked output apply the DC motor speed and direction
  * @note	Link value is the settings value of the mapper not the actual output value
  * @note	Only 100..109 and 200..210 are meaningful, but the settings range is a single 0..210
- * 			interval and cannot exclude the gap, so an invalid link resolves to 0.0f in the getters
+ * 			interval and cannot exclude the gap, so an invalid link resolves to FAC_VALUE_ZERO
  */
 static void FAC_mapper_apply_to_DCmotor(uint8_t motorNumber, uint8_t linkValue) {
-	float outputLinkedValue = 0.0f;
+	fac_value_t outputLinkedValue = FAC_VALUE_ZERO;
 
 	/* EXTRACT THE CORRECT OUTPUT VALUE */
 	if (linkValue / 100 == 1) {	// linked to a mix output	(100 prefix)
@@ -72,13 +72,10 @@ static void FAC_mapper_apply_to_DCmotor(uint8_t motorNumber, uint8_t linkValue) 
 	}
 
 	/* CALCULATE SPEED AND DIRECTION */
-	uint8_t dir = FORWARD;	// before the absolute calculate the direction
-	if (outputLinkedValue < 0.0f) {	// already set to forward, so I need to check if it is backward
-		dir = BACKWARD;
-	}
-	if (outputLinkedValue < 0.0f)
-		outputLinkedValue = outputLinkedValue * (-1);
-	uint16_t speed = (uint16_t) (outputLinkedValue * MOTOR_SPEED_RESOLUTION); // translate the output value to understandable value for servos and motors
+	// the sign carries the direction and the magnitude carries the speed
+	uint8_t dir = (outputLinkedValue < 0) ? BACKWARD : FORWARD;
+	uint16_t speed = (uint16_t) ((FAC_math_abs(outputLinkedValue)
+			* MOTOR_SPEED_RESOLUTION) / FAC_VALUE_MAX);	// exact, the two resolutions are equal
 
 	/* APPLY TO THE MOTOR */
 	FAC_motor_set_speed_direction(motorNumber, dir, speed);
@@ -88,10 +85,10 @@ static void FAC_mapper_apply_to_DCmotor(uint8_t motorNumber, uint8_t linkValue) 
  * @brief	According to the output value of the linked output apply the servo
  * @note	Link value is the settings value of the mapper not the actual output value
  * @note	Only 100..109 and 200..210 are meaningful, but the settings range is a single 0..210
- * 			interval and cannot exclude the gap, so an invalid link resolves to 0.0f in the getters
+ * 			interval and cannot exclude the gap, so an invalid link resolves to FAC_VALUE_ZERO
  */
 static void FAC_mapper_apply_to_servo(uint8_t servoNumber, uint8_t linkValue) {
-	float outputLinkedValue = 0.0f;
+	fac_value_t outputLinkedValue = FAC_VALUE_ZERO;
 
 	/* EXTRACT THE CORRECT OUTPUT VALUE */
 	if (linkValue / 100 == 1) {	// linked to a mix output	(100 prefix)
@@ -101,7 +98,9 @@ static void FAC_mapper_apply_to_servo(uint8_t servoNumber, uint8_t linkValue) {
 	}
 
 	/* CALCULATE SERVO POSITION/ESC VELOCITY */
-	uint16_t position = (uint16_t) (map_float(outputLinkedValue, -1.0f, 1.0f, 0.0f, (float) SERVO_POSITION_RESOLUTION)); // translate the output value to understandable value for servos and motors
+	// the full negative travel is position 0 and the full positive one is the last position
+	uint16_t position = (uint16_t) FAC_math_to_range(outputLinkedValue, 0,
+	SERVO_POSITION_RESOLUTION);
 
 	/* APPLY TO THE MOTOR */
 	FAC_servo_set_position(servoNumber, position);

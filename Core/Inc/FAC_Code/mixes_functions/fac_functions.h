@@ -10,13 +10,14 @@
 
 #include "stm32f0xx_hal.h"
 #include "FAC_Code/config.h"
+#include "FAC_Code/mixes_functions/fac_math.h"	// fac_value_t and the math primitives a function is built from
 
 #define SPECIAL_FUNCITONS_NUMBER 20
 
 typedef struct SpecialFunctions {
 	uint8_t special_functions_input_channels[SPECIAL_FUNCITONS_NUMBER];	// 20 possible function, each function has its own input channel
-	float special_functions_inputs[SPECIAL_FUNCITONS_NUMBER];		// 20 normalized inputs one for each function
-	float special_functions_outouts[SPECIAL_FUNCITONS_NUMBER];		// 20 normalized outputs one for each function
+	fac_value_t special_functions_inputs[SPECIAL_FUNCITONS_NUMBER];		// 20 normalized inputs one for each function [-1000, +1000]
+	fac_value_t special_functions_outouts[SPECIAL_FUNCITONS_NUMBER];		// 20 normalized outputs one for each function [-1000, +1000]
 } SpecialFunctions;
 
 enum FAC_SPECIAL_FUNCTIONS_ID {		// 8) of HOW TO MAKE A SPECIAL FUNCTION
@@ -40,9 +41,9 @@ enum FAC_SPECIAL_FUNCTIONS_ID {		// 8) of HOW TO MAKE A SPECIAL FUNCTION
 	FAC_SPECIAL_FUNCTION_LAST
 };
 
-float FAC_functions_GET_output(uint8_t functionNumber);
-float FAC_functions_GET_input(uint8_t functionNumber);
-void FAC_functions_SET_output(uint8_t functionNumber, float outputValue);
+fac_value_t FAC_functions_GET_output(uint8_t functionNumber);
+fac_value_t FAC_functions_GET_input(uint8_t functionNumber);
+void FAC_functions_SET_output(uint8_t functionNumber, fac_value_t outputValue);
 void FAC_functions_update_input(uint8_t functionNumber);	// refresh one slot, used by the functions boilerplate
 void FAC_functions_update_inputs(void);	// refresh all the slots, NOT USED, kept for a function that needs more than its own
 void FAC_functions_update(uint8_t sFunctionID);

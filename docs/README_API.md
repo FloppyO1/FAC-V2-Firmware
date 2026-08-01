@@ -150,7 +150,7 @@ This is the heart of the firmware and the part worth understanding first.
         │  FAC_std_receiver_GET_channel(n)   1-based
         ▼
 ┌─────────────────┬─────────────────────────┐
-│ fac_mixes       │ fac_functions           │   normalised floats  -1.0f … +1.0f
+│ fac_mixes       │ fac_functions           │   normalised integers  -1000 … +1000
 │ 8 in / 10 out   │ 20 × (1 in / 1 out)     │
 │ one active mix  │ all enabled ones run    │
 └─────────────────┴─────────────────────────┘
@@ -199,7 +199,9 @@ Channel 3 is special-cased: as the throttle stick usually has no return spring, 
 | Disabled when | — | its input channel setting is `0` |
 | Purpose | coupled logic (e.g. differential steering) | independent per-channel behaviour |
 
-Both produce **normalised floats in `[-1.0f, +1.0f]`**. That is the contract between the processing layer and the mapper: for a DC motor, sign is direction and magnitude is speed; for a servo, `-1.0` is one end of travel and `+1.0` the other.
+Both produce **normalised integers in `[-1000, +1000]`** (`fac_value_t`, defined with the math primitives in `fac_math.h`). That is the contract between the processing layer and the mapper: for a DC motor, sign is direction and magnitude is speed; for a servo, `-1000` is one end of travel and `+1000` the other.
+
+The scale is not arbitrary: it equals `RECEIVER_CHANNEL_RESOLUTION`, `MOTOR_SPEED_RESOLUTION` and `SERVO_POSITION_RESOLUTION`, so both ends of the chain convert exactly. There are **no floats left in this chain** — M0 has no FPU, and every float operation was a library call.
 
 The only implemented mix is **simple tank** (differential steering): it takes throttle and steering, computes `left = throttle + steering`, `right = throttle - steering`, adds a correction term so the range is preserved, and scales back into `[-1, +1]`. The only implemented special function is **direct link**, which passes its input straight through — used to drive a servo or motor directly from a stick.
 
@@ -217,7 +219,7 @@ This is the mechanism that makes the board configurable. Each of the five physic
 
 1. Reads the five link values.
 2. Updates *only* the mix and special functions actually referenced (each at most once per loop, tracked by local flags) — so unused processing costs nothing.
-3. Converts each normalised output to the device's units: motors get sign → direction, `|value| × MOTOR_SPEED_RESOLUTION` → speed; servos get `map_float(value, -1, +1, 0, SERVO_POSITION_RESOLUTION)`.
+3. Converts each normalised output to the device's units: motors get sign → direction and `FAC_math_abs(value)` → speed; servos get `FAC_math_to_range(value, 0, SERVO_POSITION_RESOLUTION)`. Both are exact, because the normalised scale equals the device resolutions.
 
 **Default configuration** (from the settings defaults): M1 ← mix output 0 (left track), M2 ← mix output 1 (right track), S1 ← special function 0 (direct link on channel 3), M3 and S2 unused.
 
@@ -297,7 +299,7 @@ float    map_float (float    x, float    in_min, float    in_max, float    out_m
 | `FAC_app_GET_current_state` | Current state, one of `FAC_STATE_DISARMED` / `FAC_STATE_NORMAL` / `FAC_STATE_CUTOFF`. |
 | `FAC_app_GET_battery_type` | Cell count detected **once at boot**: `BATTERY_TYPE_USB`(0), `_1S`(1) … `_4S`(4), `_NONE`(5). |
 | `map_uint32` / `map_int32` | Integer range conversion. Clamps `x` to `in_max` (but **not** to `in_min`). Uses 64-bit intermediates to avoid overflow. |
-| `map_float` | Float range conversion. Clamps `x` to **both** ends. |
+| `map_float` | Float range conversion. Clamps `x` to **both** ends. **No longer used by the mix/function/mapper chain**, which is integer only — kept for code outside it. |
 
 Global variable exported for the USB layer:
 
@@ -407,7 +409,7 @@ void FAC_mapper_apply_to_devices(void);
 
 Reads the five mapper settings, updates only the referenced mix / special functions, converts their normalised outputs into device units and applies them. **Must be called every loop iteration** to keep outputs alive. Devices with link value `0` are actively disabled (motors to 0, servo PWM off).
 
-**Link value validity** — only `100 … 109` (mix outputs) and `200 … 210` (special function outputs) decode to a real output, but the setting's `{min, max}` is a single `0 … 210` interval and cannot express the gap, so `110 … 199` reaches the mapper. The output accessors bounds-check the index themselves and return `0.0f`, which makes an invalid link behave like "no output" instead of reading past the arrays — see issue #17.
+**Link value validity** — only `100 … 109` (mix outputs) and `200 … 210` (special function outputs) decode to a real output, but the setting's `{min, max}` is a single `0 … 210` interval and cannot express the gap, so `110 … 199` reaches the mapper. The output accessors bounds-check the index themselves and return `FAC_VALUE_ZERO`, which makes an invalid link behave like "no output" instead of reading past the arrays — see issue #17.
 
 ### 8.7 `fac_mixes` — mix framework
 
@@ -424,9 +426,9 @@ float FAC_mixes_GET_output(uint8_t outputNumber);         // 0-based
 |---|---|
 | `FAC_mixes_init` | Loads the active mix ID and per-input channel/reversal settings; zeroes inputs and outputs. Requires settings to be loaded first. |
 | `FAC_mix_update` | Dispatches to the active mix's update function. Add a `case` here for each new mix. |
-| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver, normalising `0…999` → `-1.0f…+1.0f` and applying per-input reversal from the values cached by `init()`. Disabled inputs (channel `0`) become `0.0f`. Called by the mix boilerplate. |
+| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver, normalising `0…999` → `-1000…+1000` with `FAC_math_from_range` and applying per-input reversal from the values cached by `init()`. Disabled inputs (channel `0`) become `FAC_VALUE_ZERO`. Called by the mix boilerplate. |
 | `FAC_mixes_update_mix_outputs` | Copies a mix's local output array into the shared struct. **Must be called at the end of every mix update.** |
-| `FAC_mixes_GET_input` / `_GET_output` | Read the shared normalised arrays. Both bounds-check the index and return `0.0f` when it is out of range — the mapper can reach them with an invalid link value (issue #17). |
+| `FAC_mixes_GET_input` / `_GET_output` | Read the shared normalised arrays. Both bounds-check the index and return `FAC_VALUE_ZERO` when it is out of range — the mapper can reach them with an invalid link value (issue #17). |
 
 Both the input channel and the reversal flag are **cached at `init()`**, so changing either through USB takes effect on the next *apply*, not on the write itself.
 
@@ -446,10 +448,10 @@ float FAC_functions_GET_output(uint8_t functionNumber);
 |---|---|
 | `FAC_functions_init` | Loads each function's input channel from settings; zeroes inputs and outputs. |
 | `FAC_functions_update` | Dispatches to the implementation for `sFunctionID` (an `FAC_SPECIAL_FUNCTIONS_ID` value). The three `DC_SERVO` IDs are declared but their function was never written — see issue #8. |
-| `FAC_functions_update_input` | Refreshes **one** slot from the receiver, normalised to `[-1, +1]`; a disabled slot (input channel `0`) is reset to `0.0f`, and an out-of-range index is ignored. This is what the function boilerplate calls: a special function has exactly one input, so refreshing all 20 slots was the same work repeated once per linked function. |
+| `FAC_functions_update_input` | Refreshes **one** slot from the receiver, normalised to `[-1000, +1000]`; a disabled slot (input channel `0`) is reset to `FAC_VALUE_ZERO`, and an out-of-range index is ignored. This is what the function boilerplate calls: a special function has exactly one input, so refreshing all 20 slots was the same work repeated once per linked function. |
 | `FAC_functions_update_inputs` | Loops `FAC_functions_update_input` over all 20 slots. **Currently has no caller** — the boilerplate no longer uses it. Kept on purpose for a future function that has to read slots other than its own; call it before reading them. |
 | `FAC_functions_SET_output` | Where a function publishes its result. Ignores an out-of-range `functionNumber`. |
-| `FAC_functions_GET_input` / `_GET_output` | Read the shared arrays. Both bounds-check the index and return `0.0f` when it is out of range — the mapper can reach them with an invalid link value (issue #17). |
+| `FAC_functions_GET_input` / `_GET_output` | Read the shared arrays. Both bounds-check the index and return `FAC_VALUE_ZERO` when it is out of range — the mapper can reach them with an invalid link value (issue #17). |
 
 Implemented behaviours:
 

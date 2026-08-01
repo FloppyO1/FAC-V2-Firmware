@@ -28,7 +28,7 @@ static void FAC_functions_SET_input_channels(uint8_t functionNumber, uint8_t inp
 	sFunctions.special_functions_input_channels[functionNumber] = inputChannel;
 }
 
-static void FAC_functions_SET_input(uint8_t functionNumber, float inputValue) {
+static void FAC_functions_SET_input(uint8_t functionNumber, fac_value_t inputValue) {
 	sFunctions.special_functions_inputs[functionNumber] = inputValue;
 }
 
@@ -40,22 +40,22 @@ static uint8_t FAC_functions_GET_input_channel_number(uint8_t functionNumber) {
 
 /*
  * @brief	Get the output of one of the special functions
- * @note	functionNumber is 0 based, an out of range index returns 0.0f. The mapper link value
+ * @note	functionNumber is 0 based, an out of range index returns FAC_VALUE_ZERO. The mapper link value
  * 			(200+i) is only range checked against the settings table, so an invalid index can reach here
  */
-float FAC_functions_GET_output(uint8_t functionNumber) {
+fac_value_t FAC_functions_GET_output(uint8_t functionNumber) {
 	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
-		return 0.0f;
+		return FAC_VALUE_ZERO;
 	return sFunctions.special_functions_outouts[functionNumber];
 }
 
-float FAC_functions_GET_input(uint8_t functionNumber) {
+fac_value_t FAC_functions_GET_input(uint8_t functionNumber) {
 	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
-		return 0.0f;
+		return FAC_VALUE_ZERO;
 	return sFunctions.special_functions_inputs[functionNumber];
 }
 
-void FAC_functions_SET_output(uint8_t functionNumber, float outputValue) {
+void FAC_functions_SET_output(uint8_t functionNumber, fac_value_t outputValue) {
 	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
 		return;
 	sFunctions.special_functions_outouts[functionNumber] = outputValue;
@@ -67,7 +67,7 @@ void FAC_functions_SET_output(uint8_t functionNumber, float outputValue) {
  * @note		A special function has exactly one input, so only its own slot has to be refreshed.
  * 				Refreshing all of them was the very same work repeated for every linked function
  * @note		functionNumber is 0 based, an out of range index is ignored, and a disabled slot
- * 				(input channel 0) is reset to 0.0f to not leave a stale value behind
+ * 				(input channel 0) is reset to FAC_VALUE_ZERO to not leave a stale value behind
  */
 void FAC_functions_update_input(uint8_t functionNumber) {
 	if (functionNumber >= SPECIAL_FUNCITONS_NUMBER)
@@ -77,18 +77,14 @@ void FAC_functions_update_input(uint8_t functionNumber) {
 
 	if (chNumber != 0) {	// if this channel is valid
 		uint16_t rxValue = FAC_std_receiver_GET_channel(chNumber);
-		/* map the channel value to make it standard [-1.0 to 1.0]
-		 * this is the same affine map that map_float(chValue, 0, 1, -1, 1) was doing on the
-		 * channel ratio, written as 2*rx/res - 1 == (2*rx - res)/res: on a mcu without fpu every
-		 * float operation is a library call, and doing it this way costs two of them instead of
-		 * the ten the previous version needed for each input of each slot */
-		float inputValue = (float) ((int32_t) rxValue * 2
-				- RECEIVER_CHANNEL_RESOLUTION)
-				/ (float) RECEIVER_CHANNEL_RESOLUTION;
+		/* bring the channel into the normalized scale of fac_math.h: with both resolutions
+		 * equal to 1000 this resolves to the exact 2*rx - 1000, and no float is involved */
+		fac_value_t inputValue = FAC_math_from_range(rxValue, 0,
+		RECEIVER_CHANNEL_RESOLUTION);
 
 		FAC_functions_SET_input(functionNumber, inputValue);// store the value into the struct array (where all mixes will take them)
 	} else {
-		FAC_functions_SET_input(functionNumber, 0.0f);	// disabled slot, do not leave a stale value behind
+		FAC_functions_SET_input(functionNumber, FAC_VALUE_ZERO);// disabled slot, do not leave a stale value behind
 	}
 }
 
@@ -152,8 +148,8 @@ void FAC_functions_update(uint8_t sFunctionID) {
 void FAC_functions_init(void) {
 	for (int i = 0; i < SPECIAL_FUNCITONS_NUMBER; i++) {	// set all input channels to zero (no input selected)
 		FAC_functions_SET_input_channels(i, FAC_settings_GET_value(FAC_SETTINGS_CODE_SPECIAL_FUNCTION1_INPUT_CHANNEL + i));
-		FAC_functions_SET_input(i, 0.0f);
-		FAC_functions_SET_output(i, 0.0f);
+		FAC_functions_SET_input(i, FAC_VALUE_ZERO);
+		FAC_functions_SET_output(i, FAC_VALUE_ZERO);
 	}
 }
 
