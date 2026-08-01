@@ -89,7 +89,7 @@ static void FAC_mapper_apply_to_servo(uint8_t servoNumber, uint8_t linkValue) {
  * @IMPORTANT	!! THIS FUNCTION MUST BE CALLED EVERY LOOP TO MANTAIN THE DEVICES STATUS UPDATED !!
  * @note		If a motor/servo is not mapped to any output it will be disabled (DC motors are setted to 0 velocity, breaked, servo pwm is disabled)
  */
-void FAC_mapper_apply_to_devices() {
+void FAC_mapper_apply_to_devices(void) {
 	/*
 	 *	The link value can be:
 	 *	-	100+i where 100 is the prefix indicating that is a mix output, and 'i' is the output number of the mix (0 to max mix output)

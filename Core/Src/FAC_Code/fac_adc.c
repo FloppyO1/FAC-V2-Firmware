@@ -19,13 +19,13 @@
 static Adc adc;
 
 /* STATIC FUNCTION PROTORYPES */
-static void FAC_adc_SET_uVref();
+static void FAC_adc_SET_uVref(void);
 /* FUNCTION DEFINITION */
 /**
  * @bried 	Get the resolution of the adc
  * @retval 	Returns the adc resolution
  */
-uint16_t FAC_adc_GET_resolution() {
+uint16_t FAC_adc_GET_resolution(void) {
 	return adc.resolution;
 }
 
@@ -33,7 +33,7 @@ uint16_t FAC_adc_GET_resolution() {
  * @bried 	Get the vref in uV of the adc
  * @retval 	Returns the vref in uV of the adc
  */
-uint32_t FAC_adc_GET_Vref_in_uV() {
+uint32_t FAC_adc_GET_Vref_in_uV(void) {
 	return adc.uVref;
 }
 
@@ -41,7 +41,7 @@ uint32_t FAC_adc_GET_Vref_in_uV() {
  * @bried 	Calculate uVref in uV with the calibration
  * @retval 	save the uVref into the adc structure
  */
-static void FAC_adc_SET_uVref() {
+static void FAC_adc_SET_uVref(void) {
 	uint32_t raw = 0;
 	for (int i = 0; i < 20; i++) {
 		raw = raw + FAC_adc_get_raw_channel_value(FAC_ADC_CH_VREFIN);
@@ -56,7 +56,7 @@ static void FAC_adc_SET_uVref() {
  * @brief 	Initialize the ADC module
  * @retval 	Status of the initialization in HAL_StatusTypeDef form
  */
-HAL_StatusTypeDef FAC_adc_Init() {
+HAL_StatusTypeDef FAC_adc_Init(void) {
 	HAL_StatusTypeDef EndState = HAL_OK;
 	/* write the code here - START */
 	HAL_Delay(100);	// wait some time to allow the power supply to stabilize its output

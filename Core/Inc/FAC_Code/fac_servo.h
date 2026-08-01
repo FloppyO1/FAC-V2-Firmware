@@ -34,6 +34,6 @@ void FAC_servo_enable(uint8_t servoNumber);
 void FAC_servo_disable(uint8_t servoNumber);
 void FAC_servo_is_reversed(uint8_t servoNumber, uint8_t isReversed);
 
-void FAC_servo_init();
+void FAC_servo_init(void);
 
 #endif /* INC_FAC_CODE_FAC_SERVO_H_ */

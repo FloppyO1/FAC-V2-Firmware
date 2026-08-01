@@ -9,11 +9,11 @@
 #define INC_JINGLES_FAC_JINGLES_H_
 
 /* songs */
-void FAC_jingle_Tequila();
-void FAC_jingle_Tequila_long();
-void FAC_jingle_neverGiveYouUp();
+void FAC_jingle_Tequila(void);
+void FAC_jingle_Tequila_long(void);
+void FAC_jingle_neverGiveYouUp(void);
 
 /* others */
-void FAC_jingle_simple_scale();
+void FAC_jingle_simple_scale(void);
 
 #endif /* INC_JINGLES_FAC_JINGLES_H_ */

@@ -207,7 +207,7 @@ void FAC_motor_make_noise(uint16_t freq, uint16_t duration) {
  * @visibility 		Visible everywhere
  * @note			Motors PWM are generated from the DMA
  */
-void FAC_motor_init() {
+void FAC_motor_init(void) {
 	initDMApwm(FAC_settings_GET_value(FAC_SETTINGS_CODE_MOTORS_FREQ));	// initialize the DMA PWM with the correct frequency
 	/* INITIALIZE THE ARRAY OF MOTOR POINTERs */
 	motors[0] = &motor1;

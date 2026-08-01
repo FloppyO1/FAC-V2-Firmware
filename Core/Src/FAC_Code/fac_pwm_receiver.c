@@ -97,7 +97,7 @@ void FAC_pwm_receiver_calculate_channel_value(uint8_t chNumber) {
  * @brief Initialize the pwmReceiver object and starts the tim2
  *
  */
-void FAC_pwm_receiver_init() {
+void FAC_pwm_receiver_init(void) {
 	HAL_TIM_Base_Start(&htim2);
 
 	for (int i = 0; i < PWM_RECEIVER_CHANNELS_NUMBER; i++) {

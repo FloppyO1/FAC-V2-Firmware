@@ -22,7 +22,7 @@ static void FAC_jingles_delay(uint16_t ms) {
 	}
 }
 
-void FAC_jingle_Tequila() {
+void FAC_jingle_Tequila(void) {
 	// "Tequila" riff
 	FAC_motor_make_noise(NOTE_C6, 125);
 
@@ -69,7 +69,7 @@ void FAC_jingle_Tequila() {
 	FAC_jingles_delay(800);
 }
 
-void FAC_jingle_Tequila_long() {
+void FAC_jingle_Tequila_long(void) {
 	// "Tequila" riff
 	FAC_motor_make_noise(NOTE_C6, 125);
 
@@ -141,7 +141,7 @@ void FAC_jingle_Tequila_long() {
 	FAC_jingles_delay(250);
 }
 
-void FAC_jingle_neverGiveYouUp() {
+void FAC_jingle_neverGiveYouUp(void) {
 	// Music Composer generator
 
 	FAC_motor_make_noise(NOTE_A5, 125);
@@ -166,7 +166,7 @@ void FAC_jingle_neverGiveYouUp() {
 	FAC_jingles_delay(250);
 }
 
-void FAC_jingle_simple_scale() {
+void FAC_jingle_simple_scale(void) {
     FAC_motor_make_noise(NOTE_C3, 63);
     FAC_motor_make_noise(NOTE_E3, 63);
     FAC_motor_make_noise(NOTE_G3, 63);

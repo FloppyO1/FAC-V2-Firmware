@@ -90,7 +90,7 @@ static const uint8_t __attribute__((unused)) mix_id = FAC_MIX_SIMPLE_TANK;// 3) 
  * @brief	Calculate the mix output values
  *
  */
-void FAC_simple_tank_mix_update() {					// 4) of HOW TO MAKE A MIX
+void FAC_simple_tank_mix_update(void) {					// 4) of HOW TO MAKE A MIX
 	// this code must be left as it is, DON'T TOUCH IT!
 	float outputs[MIXES_MAX_OUTPUTS_NUMBER];
 	float inputs[MIXES_MAX_INPUTS_NUMBER];

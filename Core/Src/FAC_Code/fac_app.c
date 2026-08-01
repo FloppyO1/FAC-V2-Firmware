@@ -31,7 +31,7 @@ static void FAC_app_SET_current_state(uint8_t current_state) {
 		fac_application.current_state = current_state;
 }
 
-uint8_t FAC_app_GET_current_state() {
+uint8_t FAC_app_GET_current_state(void) {
 	return fac_application.current_state;
 }
 
@@ -39,7 +39,7 @@ static void FAC_app_SET_is_low_battery(uint8_t is_low_battery) {
 	fac_application.is_low_battery = is_low_battery;
 }
 
-static uint8_t FAC_app_GET_is_low_battery() {
+static uint8_t FAC_app_GET_is_low_battery(void) {
 	return fac_application.is_low_battery;
 }
 
@@ -47,11 +47,11 @@ static void FAC_app_SET_battery_type(uint8_t battery_type) {
 	fac_application.battery_type = battery_type;
 }
 
-uint8_t FAC_app_GET_battery_type() {
+uint8_t FAC_app_GET_battery_type(void) {
 	return fac_application.battery_type;
 }
 /* FUNCTION DEFINITION */
-void FAC_app_main_loop() {// one cycle every 13ms [about 76Hz] (with simple tank mix on and two other direct link function)
+void FAC_app_main_loop(void) {// one cycle every 13ms [about 76Hz] (with simple tank mix on and two other direct link function)
 //	HAL_GPIO_TogglePin(DIGITAL_AUX1_GPIO_Port, DIGITAL_AUX1_Pin);	// used to see the time of execution
 	if (newComSerialReceived) {		//	1us
 		// understand the command received and do what you have to do
@@ -211,7 +211,7 @@ void FAC_app_main_loop() {// one cycle every 13ms [about 76Hz] (with simple tank
  * @brief	Initialize all modules and load from eeprom all the settings
  *
  */
-void FAC_app_init() {
+void FAC_app_init(void) {
 	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
 	HAL_Delay(300);
 	HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(500ms)
@@ -259,7 +259,7 @@ void FAC_app_init() {
  * @note	EEPROM is not initialized
  *
  */
-void FAC_app_init_all_modules() {
+void FAC_app_init_all_modules(void) {
 	FAC_battery_SET_calibration_offset(
 			FAC_settings_GET_value(FAC_SETTINGS_CODE_BATTERY_CALIBRATION));
 	FAC_motor_init();

@@ -24,7 +24,7 @@ static void FAC_mixes_SET_input_channel_number(uint8_t inputNumber,
 static void FAC_mixes_SET_output(uint8_t outputNumber, float value);
 static void FAC_mixes_SET_input_reversed(uint8_t inputNumber,
 		uint8_t isReversed);
-static uint8_t FAC_mixes_GET_current_mix();
+static uint8_t FAC_mixes_GET_current_mix(void);
 static uint8_t FAC_mixes_GET_input_channel_number(uint8_t inputNumber);
 static uint8_t FAC_mixes_GET_input_reversed(uint8_t inputNumber);
 
@@ -55,7 +55,7 @@ static void FAC_mixes_SET_input_reversed(uint8_t inputNumber,
 	mixes.mix_input_reversed[inputNumber] = isReversed;
 }
 
-static uint8_t FAC_mixes_GET_current_mix() {
+static uint8_t FAC_mixes_GET_current_mix(void) {
 	return mixes.current_mix;
 }
 
@@ -103,7 +103,7 @@ void FAC_mixes_update_mix_outputs(float mix_output[]) {
  * @IMPORTANT	!!!! MUST BE CALLED AFTER EACH CALL OF THE MIX UPDATE !!!!
  * @note		take in input the settings input array from settings
  */
-void FAC_mixes_update_mix_inputs() {
+void FAC_mixes_update_mix_inputs(void) {
 	for (int i = 0; i < MIXES_MAX_INPUTS_NUMBER; i++) {
 		uint8_t chNumber = FAC_mixes_GET_input_channel_number(i);// get channel number corresponding to the input evaluated
 
@@ -128,7 +128,7 @@ void FAC_mixes_update_mix_inputs() {
  *
  *
  */
-void FAC_mix_update() {						// 5) of HOW TO MAKE A MIX
+void FAC_mix_update(void) {						// 5) of HOW TO MAKE A MIX
 	uint8_t currentMix = FAC_mixes_GET_current_mix();
 	switch (currentMix) {
 	case FAC_MIX_NONE:
@@ -150,7 +150,7 @@ void FAC_mix_update() {						// 5) of HOW TO MAKE A MIX
  * @IMPORTANT	!! BEFORE CALLING THIS FUNCTION MAKE SECURE TO LOAD SETTINGS FROM EEPROM !!
  * @note		initialized to zero (all disabled all mix input and output) get the channels of all inputs
  */
-void FAC_mixes_init() {
+void FAC_mixes_init(void) {
 	FAC_mixes_SET_current_mix(
 			FAC_settings_GET_value(FAC_SETTINGS_CODE_ACTIVE_MIX));// get the active mix from the settings
 

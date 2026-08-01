@@ -66,7 +66,7 @@ void FAC_functions_SET_output(uint8_t functionNumber, float outputValue) {
  * @IMPORTANT	!!!! MUST BE CALLED AFTER EACH CALL OF THE FUCTIONS UPDATE !!!!
  * @note		take in input the settings input array from settings
  */
-void FAC_functions_update_inputs() {
+void FAC_functions_update_inputs(void) {
 //	for (int i = 0; i < SPECIAL_FUNCITONS_NUMBER; i++) {
 //		uint8_t chNumber = FAC_functions_GET_input_channel_number(i);	// get channel number corresponding to the input evaluated
 //
@@ -123,7 +123,7 @@ void FAC_functions_update(uint8_t sFunctionID) {
  * @IMPORTANT	!! BEFORE CALLING THIS FUNCTION MAKE SECURE TO LOAD SETTINGS FROM EEPROM !!
  * @note		initialized to zero (all disabled all mix input and output)
  */
-void FAC_functions_init() {
+void FAC_functions_init(void) {
 	for (int i = 0; i < SPECIAL_FUNCITONS_NUMBER; i++) {	// set all input channels to zero (no input selected)
 		FAC_functions_SET_input_channels(i, FAC_settings_GET_value(FAC_SETTINGS_CODE_SPECIAL_FUNCTION1_INPUT_CHANNEL + i));
 		FAC_functions_SET_input(i, 0.0f);

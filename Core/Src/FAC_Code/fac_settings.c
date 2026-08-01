@@ -115,8 +115,8 @@ static Setting settings[FAC_SETTINGS_CODE_LAST] = {	// insert every single setti
 // @formatter:on
 
 /* STATIC FUNCTION PROTORYPES */
-static void FAC_settings_LOAD_ALL_from_eeprom();
-static void FAC_settings_STORE_ALL_to_eeprom();
+static void FAC_settings_LOAD_ALL_from_eeprom(void);
+static void FAC_settings_STORE_ALL_to_eeprom(void);
 static void FAC_settings_SET_value(uint8_t code, uint16_t value);
 
 /* FUNCTION DEFINITION */
@@ -143,7 +143,7 @@ static void FAC_settings_SET_value(uint8_t code, uint16_t value) {
  * @biref	Load all settings form the eeprom
  * @note	Load directly to settings array
  */
-static void FAC_settings_LOAD_ALL_from_eeprom() {
+static void FAC_settings_LOAD_ALL_from_eeprom(void) {
 	for (int i = 0; i < FAC_SETTINGS_CODE_LAST; i++) {
 		FAC_settings_SET_value(i, FAC_eeprom_read_value(i));
 	}
@@ -153,7 +153,7 @@ static void FAC_settings_LOAD_ALL_from_eeprom() {
  * @biref	Store all settings to the eeprom
  * @note	Store the settings of the settings array
  */
-static void FAC_settings_STORE_ALL_to_eeprom() {
+static void FAC_settings_STORE_ALL_to_eeprom(void) {
 	for (int i = 0; i < FAC_SETTINGS_CODE_LAST; i++) {
 		FAC_eeprom_store_value(i, FAC_settings_GET_value(i));
 	}
@@ -201,7 +201,7 @@ static uint16_t FAC_settings_bytes_to_uint16(const uint8_t *array) {
  * 			2B	accel Y	[mg]												23-24
  * 			2B	accel Z	[mg]												25-26
  */
-static void FAC_settings_USB_SEND_telemetry() {
+static void FAC_settings_USB_SEND_telemetry(void) {
 	uint8_t telemetryPacket[27];
 	/* telemetry res code */
 	telemetryPacket[0] = FAC_USB_COMMAND_TELEMETRY_RESPONSE;
@@ -332,7 +332,7 @@ void FAC_settings_SET_calibration_offset(uint16_t value) {
  * @brief	understand the command received via COM serial and give the correct response
  * @retval	TRUE (1) if command understood, else FALSE (0)
  */
-uint8_t FAC_settings_command_response() {
+uint8_t FAC_settings_command_response(void) {
 	uint8_t commandUndestood = FALSE;
 	uint8_t command_code = comSerialBuffer[0];
 	uint8_t setting_code = comSerialBuffer[1];
@@ -469,6 +469,6 @@ void FAC_settings_init(uint8_t bootValue) {
  * @brief	Sends via USB COM wdatahat the USB serial COM received
  * @note	Send the whole USB serial buffer
  */
-void FAC_settings_SEND_what_received() {
+void FAC_settings_SEND_what_received(void) {
 	CDC_Transmit_FS(comSerialBuffer, sizeof(comSerialBuffer));
 }

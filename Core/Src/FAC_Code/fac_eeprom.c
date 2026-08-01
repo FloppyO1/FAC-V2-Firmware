@@ -67,14 +67,14 @@ static uint8_t FAC_eeprom_read_byte(uint8_t address) {
 }
 
 /* ----------------------PUBBLIC FUNCTIONS---------------------- */
-uint8_t FAC_eeprom_GET_is_first_boot_value() {
+uint8_t FAC_eeprom_GET_is_first_boot_value(void) {
 	return eeprom.is_first_boot_value;
 }
 
 /**
  * @brief	Write to eeprom the "is first boot value", it is used to know if the eeprom is already initialized or not
  */
-void FAC_eeprom_WRITE_frist_boot_value_in_eeprom(){
+void FAC_eeprom_WRITE_frist_boot_value_in_eeprom(void){
 	FAC_eeprom_write_byte(EEPROM_ISFIRSTBOOT_ADDRESS, FAC_eeprom_GET_is_first_boot_value());
 }
 
@@ -111,7 +111,7 @@ uint16_t FAC_eeprom_read_value(uint8_t position) {
  * @brief 	This function read the eeprom byte that indicates if the settings are already been stored once.
  * @retval 	Return TRUE if it si the first time
  */
-uint8_t FAC_eeprom_is_first_time() {
+uint8_t FAC_eeprom_is_first_time(void) {
 	uint8_t isFirst = FALSE;
 	if (FAC_eeprom_read_byte(EEPROM_ISFIRSTBOOT_ADDRESS) != FAC_eeprom_GET_is_first_boot_value())
 		isFirst = TRUE;

@@ -18,8 +18,8 @@ static Battery battery;
 static void FAC_battery_SET_voltage(uint16_t vbat);
 static void FAC_battery_SET_cell_voltage(uint16_t vcell);
 static void FAC_battery_SET_type(uint8_t type);
-static void FAC_battery_calculate_voltage();
-static void FAC_battery_calculate_cell_voltage();
+static void FAC_battery_calculate_voltage(void);
+static void FAC_battery_calculate_cell_voltage(void);
 static uint16_t FAC_battery_read_voltage(const uint8_t readings);
 
 /* FUNCTION DEFINITION */
@@ -43,7 +43,7 @@ void FAC_battery_SET_calibration_offset(int16_t offset) {
  * @bief 	Return the calculated Vbat
  * @retval 	Return the calculate Vbat with the format: 6.253V = 6253mV
  */
-uint16_t FAC_battery_GET_voltage() {
+uint16_t FAC_battery_GET_voltage(void) {
 	FAC_battery_calculate_voltage();
 	return battery.voltage;
 }
@@ -53,7 +53,7 @@ uint16_t FAC_battery_GET_voltage() {
  * @note 	Vcell with the format: 3.812V = 3812mV
  * @note	On USB power or on an unrecognized pack the cell count is unknown, so the pack voltage is returned
  */
-uint16_t FAC_battery_GET_cell_voltage() {
+uint16_t FAC_battery_GET_cell_voltage(void) {
 	FAC_battery_calculate_cell_voltage();
 	return battery.single_cell_voltage;
 }
@@ -70,7 +70,7 @@ uint8_t FAC_battery_GET_type(uint16_t vbat) {
  * @bief 	Return the calculated battery calibration voltage
  * @retval 	Return the calculate battery voltage calibration offset
  */
-int16_t FAC_battery_GET_calibration_offset() {
+int16_t FAC_battery_GET_calibration_offset(void) {
 	return battery.voltage_calibration_offset;
 }
 
@@ -100,7 +100,7 @@ static uint16_t FAC_battery_read_voltage(const uint8_t readings) {
  * @bief 	Calculate the voltage of the battery from the adc reading
  * @note 	Vbat with the format: 6.253V = 6253mV
  */
-static void FAC_battery_calculate_voltage() {
+static void FAC_battery_calculate_voltage(void) {
 	int16_t vbat = FAC_battery_read_voltage(5);
 	vbat = vbat + FAC_battery_GET_calibration_offset();
 	FAC_battery_SET_voltage((uint16_t) vbat);
@@ -112,7 +112,7 @@ static void FAC_battery_calculate_voltage() {
  * @note	USB power (BATTERY_TYPE_USB == 0) and an unrecognized pack (BATTERY_TYPE_NONE) have no valid
  * 			cell count, so the divider is forced to 1 (a 0 divider would be a division by zero)
  */
-static void FAC_battery_calculate_cell_voltage() {
+static void FAC_battery_calculate_cell_voltage(void) {
 	uint16_t vbat = FAC_battery_GET_voltage();
 	uint8_t cellCount = battery.type;
 	if (cellCount < BATTERY_TYPE_1S || cellCount > BATTERY_TYPE_4S)
@@ -147,7 +147,7 @@ void FAC_battery_calculate_type(uint16_t vbat) {
 /**
  * @brief	Initialize the values of the battery struct
  */
-void FAC_battery_init() {
+void FAC_battery_init(void) {
 	battery.type = BATTERY_TYPE_USB;
 	battery.voltage = 0;
 	battery.voltage_uncalibrated = 0;

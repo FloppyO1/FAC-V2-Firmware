@@ -22,6 +22,6 @@ typedef struct Pwm_receiver {
 
 void FAC_pwm_receiver_Callback(uint8_t edge, uint16_t GPIO_Pin);
 void FAC_pwm_receiver_calculate_channel_value(uint8_t chNumber);
-void FAC_pwm_receiver_init();
+void FAC_pwm_receiver_init(void);
 
 #endif /* INC_FAC_CODE_FAC_PWM_RECEIVER_H_ */
