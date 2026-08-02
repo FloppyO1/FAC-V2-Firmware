@@ -14,15 +14,20 @@
 typedef struct Gyro {
 	LSM6DS3 LSM6DS3object;
 	HAL_StatusTypeDef gyro_status;	// HAL_OK, or HAL_ERROR	(in case of error the mix or function using it must manage the problem)
+	uint32_t last_update_tick;		// when the last read landed, so one transaction serves every consumer of the same loop pass
+	uint8_t is_initialized;			// TRUE only once the whole init chain went through, see FAC_IMU_update
 } Gyro;
 
 HAL_StatusTypeDef FAC_IMU_GET_status(void);
-float FAC_IMU_GET_accel_X(void);
-float FAC_IMU_GET_accel_Y(void);
-float FAC_IMU_GET_accel_Z(void);
-float FAC_IMU_GET_gyro_X(void);
-float FAC_IMU_GET_gyro_Y(void);
-float FAC_IMU_GET_gyro_Z(void);
+void FAC_IMU_update(void);
+int16_t FAC_IMU_GET_accel_raw(uint8_t axis);
+int16_t FAC_IMU_GET_gyro_raw(uint8_t axis);
+int32_t FAC_IMU_GET_accel_X_mg(void);
+int32_t FAC_IMU_GET_accel_Y_mg(void);
+int32_t FAC_IMU_GET_accel_Z_mg(void);
+int32_t FAC_IMU_GET_gyro_X_mdps(void);
+int32_t FAC_IMU_GET_gyro_Y_mdps(void);
+int32_t FAC_IMU_GET_gyro_Z_mdps(void);
 HAL_StatusTypeDef FAC_IMU_init(void);
 void FAC_IMU_init_accelerometer(void);
 void FAC_IMU_init_gyroscope(void);

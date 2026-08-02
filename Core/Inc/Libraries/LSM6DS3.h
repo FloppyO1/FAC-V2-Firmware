@@ -109,24 +109,35 @@
 #define Y_OFS_USR           0x74  // Accelerometer Y-axis user offset
 #define Z_OFS_USR           0x75  // Accelerometer Z-axis user offset
 
-// KNOWN VALUE
-#define WHO_AM_I_VALUE 		0x6A	// see page 60 of the LSM6DS3 datasheet
-//#define WHO_AM_I_VALUE 		0x69	// a Chinese clone gives me 0x69 ??? FIXME
+// KNOWN VALUES
+// Two parts answer at this address and share the register map used here. Both are accepted: a
+// board populated with the other one would otherwise fail the identity check and boot with no imu
+#define WHO_AM_I_VALUE_LSM6DS3		0x69	// the original LSM6DS3
+#define WHO_AM_I_VALUE_LSM6DS3TRC	0x6A	// the LSM6DS3TR-C, register compatible for accel and gyro
 
 // SETTINGS
-#define TIMEOUT_I2C	100
+// A 12 byte burst read is about 150us on this bus, so 10ms is 60 times more than the transaction
+// can legitimately need. It used to be 100ms, and three of those in a row on a locked bus already
+// reach the ~400ms watchdog: the timeout is a failure detector, not a margin to be generous with
+#define TIMEOUT_I2C	10
 #define LSM6DS3_AXIS_NUMBER 3	// the sensor has 3 axis, see the AXIS enum below
 
+// SENSITIVITY OF THE FULL SCALES PROGRAMMED BY THE INIT FUNCTIONS
+// Keep these in sync with the CTRL1_XL and CTRL2_G values written by LSM6DS3_init_accel and
+// LSM6DS3_init_gyro: changing a full scale there without changing the matching constant here
+// silently scales every reading by the wrong factor
+#define LSM6DS3_ACCEL_SENSITIVITY_UG	488	// +-16g full scale: 0.488mg per LSB, expressed in micro g
+#define LSM6DS3_GYRO_SENSITIVITY_MDPS	70	// +-2000dps full scale: 70mdps per LSB
+
 // STRUCT
+// Raw counts only, no conversion to engineering units: this mcu has no fpu, so the driver hands
+// over what the sensor gave and the caller converts with integer math only if it needs to
 typedef struct LSM6DS3{
 	I2C_HandleTypeDef *i2c;
-	float acc_x;
-	float acc_y;
-	float acc_z;
-	float gyro_x;
-	float gyro_y;
-	float gyro_z;
+	int16_t accel[LSM6DS3_AXIS_NUMBER];			// x, y, z raw counts
+	int16_t gyro[LSM6DS3_AXIS_NUMBER];			// x, y, z raw counts, gyro_offsets already applied
 	int16_t gyro_offsets[LSM6DS3_AXIS_NUMBER];	// x, y, z
+	uint8_t who_am_i;							// the id the chip actually answered with, kept for diagnosis
 }LSM6DS3;
 
 enum AXIS{
@@ -139,10 +150,9 @@ enum AXIS{
 HAL_StatusTypeDef LSM6DS3_init(LSM6DS3 *LSM6DS3object, I2C_HandleTypeDef *hi2c);
 HAL_StatusTypeDef LSM6DS3_init_accel(LSM6DS3 *LSM6DS3object);
 HAL_StatusTypeDef LSM6DS3_init_gyro(LSM6DS3 *LSM6DS3object);
-void LSM6DS3_update_accelerometer_all_values(LSM6DS3 *LSM6DS3object);
-void LSM6DS3_update_accelerometer_single_value(LSM6DS3 *LSM6DS3object, uint8_t axis);
-void LSM6DS3_update_gyroscope_single_value(LSM6DS3 *LSM6DS3object, uint8_t axis);
-void LSM6DS3_update_gyroscope_all_values(LSM6DS3 *LSM6DS3object);
-void LSM6DS3_calculate_offset(LSM6DS3 *LSM6DS3object);
+HAL_StatusTypeDef LSM6DS3_update_all_values(LSM6DS3 *LSM6DS3object);
+HAL_StatusTypeDef LSM6DS3_update_accelerometer_all_values(LSM6DS3 *LSM6DS3object);
+HAL_StatusTypeDef LSM6DS3_update_gyroscope_all_values(LSM6DS3 *LSM6DS3object);
+HAL_StatusTypeDef LSM6DS3_calculate_offset(LSM6DS3 *LSM6DS3object);
 
 #endif /* INC_MYCODE_LSM6DS3_H_ */

@@ -261,18 +261,19 @@ static void FAC_settings_USB_SEND_telemetry(void) {
 	/* accelerometer */
 	uint8_t accel[2];
 #ifndef IM_TESTING_FAC_TOOL
+	FAC_IMU_update();	// one i2c transaction for all six axis, the three reads below then cost nothing
 	// X
-	int16_t accelTemp = (int16_t) (FAC_IMU_GET_accel_X() * 1000.0f);
+	int16_t accelTemp = (int16_t) FAC_IMU_GET_accel_X_mg();	// +-16000mg at the programmed full scale, it fits
 	FAC_settings_uint16_to_bytes(accelTemp, accel);
 	telemetryPacket[21] = accel[0];
 	telemetryPacket[22] = accel[1];
 	// Y
-	accelTemp = (int16_t) (FAC_IMU_GET_accel_Y() * 1000.0f);
+	accelTemp = (int16_t) FAC_IMU_GET_accel_Y_mg();
 	FAC_settings_uint16_to_bytes(accelTemp, accel);
 	telemetryPacket[23] = accel[0];
 	telemetryPacket[24] = accel[1];
 	// Z
-	accelTemp = (int16_t) (FAC_IMU_GET_accel_Z() * 1000.0f);
+	accelTemp = (int16_t) FAC_IMU_GET_accel_Z_mg();
 	FAC_settings_uint16_to_bytes(accelTemp, accel);
 	telemetryPacket[25] = accel[0];
 	telemetryPacket[26] = accel[1];

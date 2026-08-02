@@ -584,17 +584,30 @@ void FAC_IMU_init_accelerometer(void);
 void FAC_IMU_init_gyroscope(void);
 void FAC_IMU_compute_gyro_offset(void);
 HAL_StatusTypeDef FAC_IMU_GET_status(void);
-float FAC_IMU_GET_accel_X(void);  // g
-float FAC_IMU_GET_accel_Y(void);
-float FAC_IMU_GET_accel_Z(void);
-float FAC_IMU_GET_gyro_X(void);   // deg/s
-float FAC_IMU_GET_gyro_Y(void);
-float FAC_IMU_GET_gyro_Z(void);
+void    FAC_IMU_update(void);                  // the only call that touches the bus
+int16_t FAC_IMU_GET_accel_raw(uint8_t axis);   // raw counts, axis is X_AXIS / Y_AXIS / Z_AXIS
+int16_t FAC_IMU_GET_gyro_raw (uint8_t axis);
+int32_t FAC_IMU_GET_accel_X_mg(void);          // milli g, 1 g = 1000
+int32_t FAC_IMU_GET_accel_Y_mg(void);
+int32_t FAC_IMU_GET_accel_Z_mg(void);
+int32_t FAC_IMU_GET_gyro_X_mdps(void);         // milli deg/s, 1 dps = 1000
+int32_t FAC_IMU_GET_gyro_Y_mdps(void);
+int32_t FAC_IMU_GET_gyro_Z_mdps(void);
 ```
 
 > **Always check `FAC_IMU_GET_status() != HAL_ERROR` before using IMU data.** An init failure is non-fatal — the firmware keeps running without the IMU — so consumers must handle it.
 
-Each `GET_accel_*` / `GET_gyro_*` call performs a **blocking I²C read** of that axis; they are not cached. Accelerometer range is ±16 g at 416 Hz; gyroscope ±2000 dps at 416 Hz.
+**The read model is `update` then `GET`.** `FAC_IMU_update()` refreshes all six axes with a **single I²C transaction** and is the only function on the bus; every accessor afterwards is a plain field read and costs nothing. Three guards make it cheap to call unconditionally:
+
+- it returns immediately until the whole init chain has completed, so a missing sensor is never addressed;
+- a second call **inside the same millisecond** returns at once — no loss of freshness, since at the 416 Hz output data rate a new sample only lands every 2.4 ms. This is what lets any number of consumers in one loop pass share one transaction;
+- after a failed read the sensor is marked `HAL_ERROR` and retried only **once a second**, so a sensor that dropped off the bus cannot spend a blocking timeout on every loop pass.
+
+A failed read leaves the previous values in place, so `FAC_IMU_GET_status()` is what distinguishes fresh data from stale.
+
+**Units.** Accelerometer ±16 g at 416 Hz, gyroscope ±2000 dps at 416 Hz. `_mg` costs one division per call; `_mdps` costs **none** — the sensitivity is a whole 70 mdps per count, which is why milli-degrees and not degrees. A mix is usually better off with `_raw` plus `FAC_math_from_range`, which normalises without paying for an intermediate unit. There are **no floats left in this module**.
+
+> Gyro full scale is ±2000 dps ≈ **333 RPM**: fast enough for stabilisation or self-righting, but a melty brain saturates it long before its working speed. The usual way round is centripetal acceleration (`ω = √(a/r)`), which is bounded in turn by the ±16 g accelerometer and by how far from the spin axis the IMU sits.
 
 ### 8.14 `Libraries/LSM6DS3` — IMU driver
 
@@ -602,16 +615,19 @@ Each `GET_accel_*` / `GET_gyro_*` call performs a **blocking I²C read** of that
 HAL_StatusTypeDef LSM6DS3_init(LSM6DS3 *obj, I2C_HandleTypeDef *hi2c);
 HAL_StatusTypeDef LSM6DS3_init_accel(LSM6DS3 *obj);
 HAL_StatusTypeDef LSM6DS3_init_gyro (LSM6DS3 *obj);
-void LSM6DS3_update_accelerometer_single_value(LSM6DS3 *obj, uint8_t axis);
-void LSM6DS3_update_accelerometer_all_values  (LSM6DS3 *obj);
-void LSM6DS3_update_gyroscope_single_value    (LSM6DS3 *obj, uint8_t axis);
-void LSM6DS3_update_gyroscope_all_values      (LSM6DS3 *obj);
-void LSM6DS3_calculate_offset(LSM6DS3 *obj);
+HAL_StatusTypeDef LSM6DS3_update_all_values(LSM6DS3 *obj);               // both sensors, one transaction
+HAL_StatusTypeDef LSM6DS3_update_accelerometer_all_values(LSM6DS3 *obj);
+HAL_StatusTypeDef LSM6DS3_update_gyroscope_all_values    (LSM6DS3 *obj);
+HAL_StatusTypeDef LSM6DS3_calculate_offset(LSM6DS3 *obj);
 ```
 
-`LSM6DS3_init` verifies `WHO_AM_I == 0x6A` and returns `HAL_ERROR` if a different device answers. Results are written into the object's `acc_*` (g) and `gyro_*` (deg/s) fields; `axis` is `X_AXIS` / `Y_AXIS` / `Z_AXIS`.
+The driver is a **pure register interface**: it stores raw counts in `accel[]` / `gyro[]` and performs no unit conversion at all — that belongs to `fac_imu`, which owns the sensitivity constants' meaning. Every function returns a `HAL_StatusTypeDef` and **every caller must check it**: an unverified read leaves the previous values in place and looks exactly like a sensor standing still.
 
-`LSM6DS3_calculate_offset` averages 200 gyro samples per axis and stores the negated result in `gyro_offsets[LSM6DS3_AXIS_NUMBER]`, which `LSM6DS3_update_gyroscope_single_value` then adds to every reading. The call blocks for ~1 s and refreshes the IWDG in its loop.
+`LSM6DS3_init` accepts **either** `WHO_AM_I` value — `0x69` (LSM6DS3) or `0x6A` (LSM6DS3TR-C), which share the register map used here — and stores the one that answered in `obj->who_am_i` for diagnosis. It returns `HAL_ERROR` when nothing answers or when the id is neither. It then sets `BDU` and `IF_INC` in `CTRL3_C`; **both bits are load-bearing** — `IF_INC` is what makes a burst read return consecutive registers instead of the same one repeatedly, and `BDU` is what keeps a multi-byte read from straddling two samples. It does **not** call `HAL_I2C_Init`: the bus is shared with the EEPROM and brought up once by `MX_I2C1_Init`.
+
+The gyro and accelerometer output registers are contiguous (`0x22`…`0x2D`), which is what lets `LSM6DS3_update_all_values` fetch **twelve bytes, both sensors, all six axes, in one transaction**.
+
+`LSM6DS3_calculate_offset` takes a **true average of 128 gyro samples** per axis, accumulated on `int32_t`, and stores the negated and saturated result in `gyro_offsets[]`, which the update functions then add to every reading — summed on `int32_t` and saturated back, so a reading near the negative full scale plus a negative offset cannot wrap into a large positive one. 128 is a power of two so the average is a shift, not an `__aeabi_idiv`. The call blocks for ~400 ms, refreshes the IWDG in its loop, and requires the robot to stand still. On any failed read it returns `HAL_ERROR` and leaves the offsets at zero — half an average would be subtracted from every later reading.
 
 ### 8.15 `Libraries/DMApwm` — soft-PWM engine
 
@@ -808,7 +824,7 @@ Adding a new `.c` file requires regenerating the STM32CubeIDE build files (`Debu
 
 Found while documenting the code. Numbering is kept stable, so entries move to [11.1 Fixed](#111-fixed) or [11.2 Withdrawn](#112-withdrawn-not-bugs) instead of being renumbered. The same list is tracked in [CLAUDE.md](CLAUDE.md).
 
-What remains open is one enum entry whose feature was never written; everything else, including #19–#21 found later from a live hardware report rather than from reading the code, is closed:
+What remains open is one enum entry whose feature was never written; everything else is closed — including #19–#21, found from a live hardware report rather than from reading the code, and #22–#29, found during the IMU pass that converted that module to integers:
 
 | # | Severity | Location | Issue |
 |---|---|---|---|
@@ -837,6 +853,14 @@ What remains open is one enum entry whose feature was never written; everything 
 | 19 | **High** | `fac_std_receiver.c`, `Libraries/DMApwm.c`, `fac_servo.c` | Found from a live hardware report — motors and servos kicking hard enough to spike current draw and occasionally brown out the supply on every FAC Tool "apply" — not from reading the code. `FAC_app_init_all_modules()` (USB command 06) unconditionally re-ran the boot-time init of every output module on a robot that could be armed and moving. `FAC_std_reciever_init()` zeroed `receiver.channels[]`; a channel of `0` decodes to `-1000` (`FAC_math_from_range(0,0,1000)`), i.e. full negative travel, not "no signal", so every mix/function briefly commanded full reverse / servo end-stop until the next RC frame (~20 ms). `initDMApwm()` zeroed the soft-PWM buffer via `zeroSoftPWM()`; a zeroed BSRR entry writes nothing, so the six motor pins **froze** at whatever level they held at that instant instead of resuming a duty cycle. `FAC_servo_apply_new_freq()` called `HAL_TIM_Base_Init()`, whose `TIM_Base_SetConfig()` ends with `EGR = TIM_EGR_UG`, an immediate update event that restarts TIM3's counter mid-pulse, truncating or doubling whichever pulse was in flight. | Each of the three modules now carries a `static uint8_t <module>Initialized` flag. `FAC_std_reciever_init()` returns immediately when the receiver `type` is unchanged. `FAC_motor_init()` only calls the buffer-clearing `initDMApwm()` on the first call; a later frequency change goes through `FAC_DMA_pwm_change_freq()` alone. `FAC_servo_init()` only calls `FAC_servo_apply_new_freq()` when the frequency setting actually changed, and its two safety `FAC_servo_disable()` calls are boot-only. Speed, direction, servo-enable and servo-position are never re-applied by these inits — the mapper rewrites them on the next loop pass regardless. See [§6.4](#64-applying-settings-without-disturbing-a-live-robot). |
 | 20 | **High** | `fac_eeprom.c` `FAC_eeprom_write_byte()` | Found alongside #19, while auditing `FAC_settings_STORE_ALL_to_eeprom()` after the same hardware report. `FAC_eeprom_write_byte()` blocks ~10 ms per byte and nothing on the EEPROM path refreshed the IWDG (~400 ms timeout — this file previously stated 500 ms, which was also wrong; see [§7](#7-timing-and-the-watchdog)). A save with ~20 or more **changed** settings (20 ms each) already exceeds the timeout and resets the board mid-write, leaving the EEPROM with new values up to the setting it reached and stale ones after it, silently. **Not confirmed as the cause of any specific report** — a save of only a handful of settings, with the FAC Tool waiting for each write's ack before sending the next, stays far under the threshold — but a real, independent defect on any larger save regardless. | `HAL_IWDG_Refresh(&hiwdg)` added inside `FAC_eeprom_write_byte()`, immediately before the blocking `HAL_Delay(10)`. The main-loop refresh cannot substitute for it, since it only runs after the whole USB command has already returned. |
 | 21 | **Medium** | `fac_mapper.c` `FAC_mapper_apply_to_devices()` | Found alongside #19. The `if (mN_link) { … }` blocks for the three DC motors had no `else`, unlike the servo blocks a few lines below, which already forced a disabled servo's PWM off on every pass. A motor that was mapped, then unmapped (link value set to `0`) through the FAC Tool, kept running at its last commanded speed and direction forever — the mapper simply stopped writing to it instead of stopping it. | Each motor block now has an `else FAC_motor_set_speed_direction(n, FORWARD, 0);`, mirroring the servo disable a few lines below and matching what the function's own doc comment already claimed ("unmapped devices are forced safe"). |
+| 22 | **High** | `LSM6DS3.c` `LSM6DS3_calculate_offset()` | Found during the IMU pass. The loop body was `avg = avg + sample; avg = avg / 2;`, which is **not an average of 200 samples** but an exponential filter with a weight of one half. Its residual noise is that of averaging **three** readings, whatever the sample count — so the function spent ~1 s of boot and 600 I²C transactions to buy almost nothing, and each `/2` truncated toward zero, biasing the result. The `int16_t` accumulator could also overflow (`avg + sample` reaches twice full scale) if the robot was moved while powering up, which is signed overflow, i.e. UB. | A true average: `int32_t sum[]` accumulated over **128** samples, divided once at the end with round-to-nearest and saturated back into `int16_t`. 128 is a power of two, so the division is a shift rather than an `__aeabi_idiv`. Sampling is spaced 3 ms, just above the 2.4 ms of the 416 Hz output data rate, so no sample is counted twice: boot cost drops from ~1 s to ~400 ms **and** the residual offset error is divided by about 11. A failed read now aborts and leaves the offsets at zero rather than committing a partial average. |
+| 23 | **Medium** | `LSM6DS3.c` gyro offset application | `int16_t axis_g = read(...) + offset` computed the sum on `int` and then **truncated it to 16 bits**. With a reading near the negative full scale and a negative offset the result wraps into a large positive value: at ±2000 dps that is the gyroscope reporting a full-speed spin **in the wrong direction**, precisely when the robot is spinning hardest. | The sum is done on `int32_t` and saturated back with `saturate_to_int16()`, so the reading pins at full scale instead of changing sign. The same helper guards the stored offset. |
+| 24 | **Medium** | `fac_imu.c` | `FAC_IMU_init_accelerometer()` / `_init_gyroscope()` overwrote `gyro_status` unconditionally — their `if (FAC_IMU_GET_status() != HAL_ERROR)` guards were commented out — and `fac_app.c` discards the return value of `FAC_IMU_init()`. Net effect: **the `WHO_AM_I` check was disarmed**. Any chip that answered at `0x6A` and acknowledged a register write came back `HAL_OK`, with no 20-blink diagnostic, even though identification had failed. Symmetrically, `FAC_IMU_init()` set the status only on failure, so the success path worked purely because the struct is zero-initialised and `HAL_OK` is `0`. | The guards are restored as real code: both init steps return early when the status is already `HAL_ERROR`, and `FAC_IMU_init()` now sets the status on **both** outcomes. `FAC_IMU_compute_gyro_offset()` got the same guard. |
+| 25 | **Medium** | `LSM6DS3.h` | Only `0x6A` was accepted, with a commented-out note about "a Chinese clone" answering `0x69`. `0x69` is in fact the id of the **original LSM6DS3** and `0x6A` that of the **LSM6DS3TR-C**; the two share the register map this driver uses. A board populated with the other part failed identification and booted with no IMU at all. | Both ids are accepted (`WHO_AM_I_VALUE_LSM6DS3` / `_LSM6DS3TRC`) and the one that actually answered is kept in `obj->who_am_i`, so which part is fitted stays visible in the debugger instead of being a boot failure. |
+| 26 | **Medium** | `LSM6DS3.c` all read helpers | The return status of `HAL_I2C_Mem_Read` was **discarded everywhere**. A sensor that dropped off the bus left the previous values in the buffer and kept reporting them for the rest of the run, with `gyro_status` still `HAL_OK` — indistinguishable from a sensor holding perfectly still, which is exactly the reading a self-righting or stabilisation function would trust. | Every read returns its status and every caller checks it. A failed read propagates to `gyro_status`, leaves the last values in place, and `FAC_IMU_GET_status()` is documented as the way to tell fresh data from stale. |
+| 27 | **Low** | `LSM6DS3.h` `TIMEOUT_I2C` | 100 ms per transaction against a **~400 ms watchdog**: three axis reads on a locked bus (300 ms) already came within one main-loop pass of a reset, and the telemetry path did exactly three. | Reduced to 10 ms, about 60× what a 12-byte burst legitimately needs on this bus. Paired with the once-a-second retry backoff in `FAC_IMU_update()`, a dead sensor now costs one 10 ms timeout per second instead of one per read. |
+| 28 | **Info** | `LSM6DS3.c` `LSM6DS3_init()` | Called `HAL_I2C_Init()` on the shared bus handle, from inside a device driver, on a peripheral already brought up by `MX_I2C1_Init()` and already in use by the EEPROM. Harmless in effect (the re-init lands on the same configuration) but a layering violation: a device driver briefly disabling the bus every other device shares. | Removed. The bus is initialised once by CubeMX-generated code, as for every other peripheral. |
+| 29 | **Info** | `fac_imu.c`, `fac_settings.c` | Performance, not a defect. Each `FAC_IMU_GET_accel_*()` performed its own blocking I²C transaction, so telemetry cost **three** round trips for data that lives in six contiguous registers. The values were then converted raw → g in floats (`× 0.488f / 1000.0f`) only for the telemetry to convert them straight back with `× 1000.0f` — a float multiply, divide and two conversions per axis, on a core with no FPU, to recover what is `raw × 488 / 1000` in integers. The IMU was the last float island left after the fixed-point conversion of the mix/function/mapper chain. | `FAC_IMU_update()` fetches all six axes in **one** transaction and the accessors became free field reads. The driver stores raw counts and `fac_imu` converts with `fac_math.h` group 2, whose header already named gyro/accel processing as its purpose. Verified on the generated code: **zero soft-float calls** in `LSM6DS3.c` and `fac_imu.c`, zero divisions in the driver, and one division per `_mg` accessor with **none** in `_mdps`. |
 
 ### 11.2 Withdrawn (not bugs)
 
