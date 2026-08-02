@@ -134,9 +134,11 @@ Step 3's `mix_id` / `first_special_function_id` is a **documentation marker only
 Two things about it that are load-bearing:
 
 - **The `±1000` scale is not arbitrary** — it equals `RECEIVER_CHANNEL_RESOLUTION`, `MOTOR_SPEED_RESOLUTION` and `SERVO_POSITION_RESOLUTION`, so the conversions at both ends of the chain are exact and nothing is rounded away.
-- **Division is the expensive operation.** M0 has no divider *and* no long multiply, so the compiler cannot turn `/1000` into a multiply-and-shift — even a constant divisor becomes an `__aeabi_idiv` call. The per-primitive division count is documented in the file header; `clamp`/`abs`/`add`/`sub`/`min`/`max` cost none.
+- **Division is the expensive operation.** M0 has no divider *and* no long multiply, so the compiler cannot turn `/1000` into a multiply-and-shift — even a constant divisor becomes an `__aeabi_idiv` call. The per-primitive division count is documented in the file header; `clamp`/`abs`/`add`/`sub`/`min`/`max` cost none. **`FAC_math_sqrt` is the one entry not to read as a cost**: it pays no division but is a fixed 16 shift-and-subtract steps, so budget it like a couple of divisions.
 
-Accuracy of the table-free trig, measured against the real functions over the whole turn: `sin`/`cos` within 2 units out of 1000 and exact at the quadrant points, `atan2` within 0.18°.
+Accuracy of the table-free trig, measured against the real functions over the whole turn: `sin`/`cos` within 2 units out of 1000 and exact at the quadrant points, `atan2` within 0.18°. `FAC_math_sqrt` is **exact**, not approximated — largest `r` with `r*r <= v`, verified over 439 116 values covering every integer to 300 000 plus the neighbourhood of every perfect square in `int32_t`.
+
+`sqrt` exists because it is the one primitive the centripetal speed estimate needs (`ω = √(a/r)`) and the only one the set was missing. Its trap is scaling, not accuracy: `sqrt(x·scale)` lands on **half** the scale, so keeping the result on the input's scale means pre-multiplying by that scale again — and then the argument still has to fit `int32_t`, which is what forces the caller to pick its units (for a melty brain, centi-rad/s fits and milli-rad/s overflows).
 
 The whole chain is converted: `Mixes`/`SpecialFunctions` store `fac_value_t`, the mapper consumes it, and the mix/function boilerplate uses `FAC_math_clamp`. Verified on the generated code: **zero soft-float calls** in `fac_mapper.c`, `fac_mixes.c`, `fac_functions.c`, `fac_simple_tank_mix.c` and `fac_direct_link_function.c`, and the tank mix now costs **no division at all**.
 

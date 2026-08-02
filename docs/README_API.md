@@ -705,7 +705,12 @@ fac_value_t FAC_math_from_range(int32_t x, int32_t in_min, int32_t in_max);     
 int32_t FAC_math_mul_scaled(int32_t a, int32_t b, int32_t scale); // 1 division — a*b/scale, 0 if scale is 0
 int32_t FAC_math_div_scaled(int32_t a, int32_t b, int32_t scale); // 1 division — a*scale/b, 0 if b is 0
 int32_t FAC_math_clamp_to  (int32_t v, int32_t min, int32_t max); // 0 divisions
+int32_t FAC_math_sqrt      (int32_t v);                           // 0 divisions, but 16 steps — see below
 ```
+
+`FAC_math_sqrt` is **exact**, unlike the trigonometry below it: it returns the largest `r` with `r*r <= v`, i.e. the real square root truncated toward zero, and `0` for a negative `v`. Verified against a reference over 439 116 values — every integer up to 300 000 plus the neighbourhood of **every** perfect square across the whole `int32_t` range — with no disagreement. It is implemented by the binary restoring method (shift, compare, subtract only), so it emits **no library call whatsoever**, not even `__aeabi_idiv`; it is not free either, since it always walks 16 steps, so budget it like a couple of divisions.
+
+> **Scaling is the caller's job.** `sqrt(x × scale)` is `sqrt(x) × sqrt(scale)`, so a root taken of a scaled value comes back on **half** the scale. To keep the result on the scale the input was in, multiply the input by that scale once more before calling. The catch is the `int32_t` ceiling: after that pre-multiplication the argument must still fit, i.e. stay under ~2×10⁹ — which is exactly where a caller has to choose its units. For the centripetal speed of a melty brain (`ω = √(a/r)`), milli-radians per second overflow and centi-radians per second do not.
 
 **3) Angles and trigonometry** — a full turn is `FAC_ANGLE_TURN` = 4096 units (so wrapping is one `AND`, not a modulo); no lookup table, polynomial approximations instead:
 
@@ -716,9 +721,9 @@ fac_value_t FAC_math_cos(int32_t angle);                // 4 (calls sin with a q
 int32_t     FAC_math_atan2(int32_t y, int32_t x);        // 6 divisions — full turn, 0 when x=y=0
 ```
 
-Measured against the real functions over a whole turn: `sin`/`cos` within 2 units out of 1000 (0.2 %) and exact at the quadrant points; `atan2` within 2 angle units, i.e. 0.18°.
+Measured against the real functions over a whole turn: `sin`/`cos` within 2 units out of 1000 (0.2 %) and exact at the quadrant points; `atan2` within 2 angle units, i.e. 0.18°. These three are approximations; `FAC_math_sqrt` in group 2 is not — it is exact.
 
-**Cost model**: the M0 has no hardware divider and no long multiply, so the compiler cannot fold a constant `/1000` into a multiply-and-shift — even that becomes an `__aeabi_idiv` call. The division counts above are exact for each primitive; `clamp`/`abs`/`add`/`sub`/`min`/`max`/`clamp_to`/`angle_wrap` cost none, which is why a mix built only out of those (the simple tank mix, for instance) costs **no division at all**.
+**Cost model**: the M0 has no hardware divider and no long multiply, so the compiler cannot fold a constant `/1000` into a multiply-and-shift — even that becomes an `__aeabi_idiv` call. The division counts above are exact for each primitive; `clamp`/`abs`/`add`/`sub`/`min`/`max`/`clamp_to`/`angle_wrap` cost none, which is why a mix built only out of those (the simple tank mix, for instance) costs **no division at all**. `sqrt` is the one entry not to read as a cost: it pays no division but is not free, being a fixed 16 iterations.
 
 ---
 
