@@ -793,6 +793,8 @@ With `IM_TESTING_FAC_TOOL` defined, all telemetry fields are **simulated** (chan
 
 ## 10. Extending the firmware
 
+> For the full contract a **generated** mix or special function has to respect — the value scale, the immutable boilerplate, every callable primitive with its cost and range limits, the sensor and state/time API, and the registration problem — see [README_MIX_EDITOR_API.md](README_MIX_EDITOR_API.md). It is written for the planned graphical mix/function editor, but it is the authoritative reference for a hand-written mix too.
+
 ### Adding a mix
 
 Templates: `Core/{Src,Inc}/FAC_Code/mixes_functions/mixes/fac_template_mix.{c,h}.template`. A **9-step recipe** is in the header comment of `fac_simple_tank_mix.c` — follow it literally; the numbered markers show exactly where to edit. Summary:
