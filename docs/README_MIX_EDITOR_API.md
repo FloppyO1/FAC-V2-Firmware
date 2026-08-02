@@ -348,7 +348,7 @@ void        FAC_functions_SET_output(uint8_t functionNumber, fac_value_t outputV
 
 ## 7. Math API — `fac_math.h`
 
-Header-only, `static inline`, no floats anywhere. **This is the closed set of operations the tool composes graphs out of** — it is what makes browser simulation possible at all, because thirteen known integer operations can be reproduced exactly while arbitrary C cannot.
+Header-only, `static inline`, no floats anywhere. **This is the closed set of operations the tool composes graphs out of** — it is what makes browser simulation possible at all, because twenty-one known integer operations can be reproduced exactly while arbitrary C cannot. (Twenty-two are defined; `FAC_math_atan_ratio` is a helper of `atan2` a graph has no reason to call, see [§ 7.5](#75-group-3--angles-and-trigonometry).)
 
 ### 7.1 The cost model
 
@@ -357,12 +357,13 @@ The Cortex-M0 has no hardware divider **and** no long multiply (`umull`), which 
 | Divisions | Primitives |
 |---|---|
 | **0** | `clamp`, `abs`, `add`, `sub`, `min`, `max`, `clamp_to`, `angle_wrap` |
+| **0, but not free** | `sqrt` — no division and no library call whatsoever, but a fixed **16 iterations** of shift/compare/subtract |
 | **1** | `mul`, `scale`, `blend`, `deadzone`, `to_range`, `from_range`, `mul_scaled`, `div_scaled` |
 | **3** | `expo` |
 | **4** | `sin`, `cos` |
 | **6** | `atan2` |
 
-A graph built only out of the zero-division primitives costs no division at all — which covers most mixes. `fac_simple_tank_mix.c` is one of them.
+A graph built only out of the zero-division primitives costs no division at all — which covers most mixes. `fac_simple_tank_mix.c` is one of them. **`sqrt` is the one row not to read as a cost**: it pays no division, but it always walks its 16 steps, so budget it like a couple of divisions rather than like a `clamp`.
 
 ### 7.2 Constants
 
@@ -410,8 +411,11 @@ These work on the whole `int32_t` range and **do not saturate**. They are the to
 | `FAC_math_mul_scaled(a, b, scale)` | `scale == 0` → `0`; else `a * b / scale` | 1 | `scale` is what represents "one": with `scale = 1000`, `a` and `b` are thousandths. **`a * b` must fit in `int32_t`** — keep both below about 46000 when they are of similar size |
 | `FAC_math_div_scaled(a, b, scale)` | `b == 0` → `0`; else `a * scale / b` | 1 | **`a * scale` must fit in `int32_t`** |
 | `FAC_math_clamp_to(v, min, max)` | `v` limited to `[min, max]` | 0 | The raw counterpart of `FAC_math_clamp`, which is fixed on `[-1000, +1000]` |
+| `FAC_math_sqrt(v)` | `v <= 0` → `0`; else the largest `r` with `r*r <= v`, i.e. the real square root truncated toward zero | 0, **16 steps** | **Exact, not an approximation** — unlike the trigonometry of [§ 7.5](#75-group-3--angles-and-trigonometry). Verified against a reference over 439 116 values (every integer up to 300 000, plus the neighbourhood of every perfect square across the whole `int32_t` range) with no disagreement. Binary restoring method: shift, compare, subtract, so **not even an `__aeabi_idiv` call**. See the scaling rule below. **`v` must fit `int32_t` *after* the pre-multiplication that rule requires — under ~2×10⁹** |
 
-Both guarded cases (`scale == 0`, `b == 0`) return `0` rather than trapping — a simulator must reproduce that, not throw.
+Both guarded cases (`scale == 0`, `b == 0`) return `0` rather than trapping — and so does `sqrt` on a negative argument. A simulator must reproduce all three, not throw.
+
+> **The scale halves — this is what a graph gets wrong.** `sqrt(x × scale)` is `sqrt(x) × sqrt(scale)`, so a root taken of a scaled value comes back on **half** the scale it went in on. To keep the result on the input's scale, multiply the input by that scale once more before calling: `FAC_math_sqrt(x * scale)` is `x`'s root, still on `scale`. The catch is the `int32_t` ceiling above, and that is precisely where the caller has to choose its units. For the centripetal speed of a melty brain (`ω = √(a/r)`, [§ 8.1](#81-imu--fac_codefac_imuh)): **centi-radians per second fit, milli-radians per second overflow.**
 
 ### 7.5 Group 3 — angles and trigonometry
 
@@ -471,7 +475,7 @@ Milli-degrees and not whole degrees on purpose: the sensitivity is a whole **70 
 
 **Axis enum** (from `Libraries/LSM6DS3.h`): `X_AXIS = 0`, `Y_AXIS = 1`, `Z_AXIS = 2`.
 
-> **Gyro full scale is ±2000 dps ≈ 333 RPM.** Enough for stabilisation or self-righting, but a melty brain saturates it well below working speed. The usual alternative is centripetal acceleration (`ω = √(a/r)`), bounded in turn by the ±16 g accelerometer and by how far from the spin axis the IMU sits. A graph doing this needs an integer square root, which **`fac_math.h` does not currently provide** — adding one is a firmware change, not something a generator can emit into a mix file.
+> **Gyro full scale is ±2000 dps ≈ 333 RPM.** Enough for stabilisation or self-righting, but a melty brain saturates it well below working speed. The usual alternative is centripetal acceleration (`ω = √(a/r)`), bounded in turn by the ±16 g accelerometer and by how far from the spin axis the IMU sits. The integer square root a graph doing this needs is **`FAC_math_sqrt`** ([§ 7.4](#74-group-2--raw-fixed-point)) — exact, no division, a fixed 16 steps. What the graph has to get right is the **units**, because the root halves the scale: `sqrt(x * scale)` is `sqrt(x) * sqrt(scale)`, so to keep the result on the scale the input was in, the input must be multiplied by that scale once more before the call, and the product must still fit `int32_t` (under ~2×10⁹). For `ω = √(a/r)` that is exactly where the choice is made: **centi-radians per second fit, milli-radians per second overflow.**
 
 ### 8.2 Battery — `FAC_Code/fac_battery.h`
 
@@ -812,7 +816,8 @@ What to verify on a generated pair before handing it to a build. A tool that che
 - [ ] Every division in the simulator is `Math.trunc`, never `Math.floor`
 - [ ] Group-1 primitives clamp arguments *and* result, in the order `fac_math.h` does
 - [ ] Group-2 primitives do **not** clamp
-- [ ] The guarded returns (`scale == 0` → 0, `b == 0` → 0, `in_max == in_min` → 0, `atan2(0,0)` → 0) are reproduced
+- [ ] The guarded returns (`scale == 0` → 0, `b == 0` → 0, `in_max == in_min` → 0, `atan2(0,0)` → 0, `sqrt(v <= 0)` → 0) are reproduced
+- [ ] `sqrt` is reproduced on **unsigned** 32-bit arithmetic (`>>>` in JavaScript, never a signed shift), and its argument is range-checked against `int32_t` *after* any scale pre-multiplication
 
 **Registration**
 
