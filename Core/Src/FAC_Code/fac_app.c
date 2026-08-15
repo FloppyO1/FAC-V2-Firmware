@@ -44,9 +44,114 @@ static volatile uint16_t normal_state_execution_time = 0;// sum of the blocks of
 static FAC_App fac_application;
 uint8_t newComSerialReceived = FALSE;	// turn true when something is received
 
+// Bookkeeping of the imu calibration run while leaving DISARMED. It is not part of FAC_App because
+// nothing outside this file has any business reading it, see FAC_app_arming_calibration_passed
+typedef struct FAC_ArmingCalibration {
+	uint32_t first_attempt_tick;	// when the current arming request started asking for a calibration
+	uint32_t last_attempt_tick;		// when the last attempt ended, for the retry interval
+	uint8_t attempts;				// how many attempts of this arming request failed so far
+	uint8_t is_running;				// TRUE from the first attempt of an arming request until the request drops
+} FAC_ArmingCalibration;
+
+static FAC_ArmingCalibration armingCalibration;
+
 /* STATIC FUNCTION PROTORYPES */
+static void FAC_app_RESET_arming_calibration(void);
+static void FAC_app_SIGNAL_arming_calibration_failed(void);
+static uint8_t FAC_app_arming_calibration_passed(uint8_t armingCh);
 
 /* STATIC FUNCTION */
+
+/*
+ * @brief	Forget everything about the arming request that was in progress
+ * @note	Called whenever the request drops and once the board actually arms, so that a
+ * 			disarm and re-arm cycle starts from a clean attempt count and a clean timeout origin
+ */
+static void FAC_app_RESET_arming_calibration(void) {
+	armingCalibration.is_running = FALSE;
+	armingCalibration.attempts = 0;
+}
+
+/*
+ * @brief	Tell the pilot the board armed WITHOUT a fresh calibration
+ * @note	It has to be unmistakably different from the single short high beep of a success, so it
+ * 			is a burst of fast blinks and two long low beeps. Blocking, but it happens once per
+ * 			arming at most and the motors are at speed 0 in DISARMED
+ */
+static void FAC_app_SIGNAL_arming_calibration_failed(void) {
+	for (int i = 0; i < FAC_ARMING_CALIBRATION_FAIL_BLINKS * 2; i++) {
+		HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+		HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
+		HAL_Delay(FAC_ARMING_CALIBRATION_FAIL_LED_PERIOD / 2);
+	}
+	FAC_motor_make_noise(FAC_ARMING_CALIBRATION_FAIL_TONE_FREQ,
+			FAC_ARMING_CALIBRATION_FAIL_TONE_DURATION);
+	FAC_motor_make_noise(FAC_ARMING_CALIBRATION_FAIL_TONE_FREQ,
+			FAC_ARMING_CALIBRATION_FAIL_TONE_DURATION);
+}
+
+/*
+ * @brief		The calibration gate between an arming REQUEST and the actual arming
+ * @note		Arming is the right moment to calibrate the imu: the robot is presumed placed in
+ * 				the arena and standing still, which is exactly what boot time is not
+ * @note		ONE attempt per main loop pass and never a retry loop in here. Each attempt blocks
+ * 				for about 400ms, and between two of them the loop has to keep running or usb, the
+ * 				receiver capture and the state machine all stop for as long as the robot is moved
+ * @note		What happens when the robot will not stand still depends on whether an arming
+ * 				channel is configured, because that is what decides who is asking to arm:
+ * 				- with a channel, the pilot asked explicitly, so give up after
+ * 				  FAC_ARMING_CALIBRATION_ATTEMPTS and arm anyway with the previous offsets. A
+ * 				  combat robot that refuses to arm is worse than one with an imprecise offset
+ * 				- without a channel the board would otherwise arm the instant the receiver sees the
+ * 				  transmitter, possibly still in the hand of its operator, so stillness becomes a
+ * 				  real gate and it only gives up after FAC_ARMING_CALIBRATION_STILLNESS_TIMEOUT
+ * @note		A board whose imu never came up arms immediately: the imu is non fatal by design
+ * @retval		TRUE when the state machine is allowed to leave DISARMED
+ */
+static uint8_t FAC_app_arming_calibration_passed(uint8_t armingCh) {
+	uint32_t now = HAL_GetTick();
+
+	if (FAC_IMU_GET_status() == HAL_ERROR) {
+		return TRUE;	// no imu on this board, arming must not depend on one
+	}
+
+	if (!armingCalibration.is_running) {
+		armingCalibration.is_running = TRUE;
+		armingCalibration.attempts = 0;
+		armingCalibration.first_attempt_tick = now;
+		armingCalibration.last_attempt_tick = now - FAC_ARMING_CALIBRATION_RETRY_PERIOD;	// let the first attempt run at once
+	}
+
+	if ((uint32_t) (now - armingCalibration.last_attempt_tick)
+			< FAC_ARMING_CALIBRATION_RETRY_PERIOD) {
+		return FALSE;	// too soon, let the loop breathe between two blocking attempts
+	}
+
+	HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);	// led solid on for the whole attempt
+	uint8_t passed = FAC_IMU_calibrate();			// blocks ~400ms, refreshes the watchdog itself
+	armingCalibration.last_attempt_tick = HAL_GetTick();
+
+	if (passed) {
+		FAC_motor_make_noise(FAC_ARMING_CALIBRATION_OK_TONE_FREQ,
+				FAC_ARMING_CALIBRATION_OK_TONE_DURATION);
+		return TRUE;
+	}
+
+	armingCalibration.attempts++;
+	if (armingCh != 0) {
+		if (armingCalibration.attempts >= FAC_ARMING_CALIBRATION_ATTEMPTS) {
+			FAC_app_SIGNAL_arming_calibration_failed();
+			return TRUE;
+		}
+	} else if ((uint32_t) (HAL_GetTick() - armingCalibration.first_attempt_tick)
+			>= FAC_ARMING_CALIBRATION_STILLNESS_TIMEOUT) {
+		FAC_app_SIGNAL_arming_calibration_failed();
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
 static void FAC_app_SET_current_state(uint8_t current_state) {
 	if (current_state < FAC_STATE_LAST)
 		fac_application.current_state = current_state;
@@ -109,30 +214,49 @@ void FAC_app_main_loop(void) {	// one cycle every ~1ms
 		/* THE FAC CAN BE ARMED ONLY IF THE RECEIVER IS CONNECTED TO THE REMOTE */
 		// the receiver is connected to the remote means that at least one channel have a non zero value
 		// usually receivers don't outputs signals if they are not connected to the remote once
-		if (FAC_std_receiver_GET_is_connected()) {
-			uint8_t armingCh = FAC_settings_GET_value(
-					FAC_SETTINGS_CODE_ARMING_CHANNEL);
-			if (armingCh != 0) {
-				uint16_t armingValue = FAC_std_receiver_GET_channel(armingCh);
-				if (armingValue
-						>= (RECEIVER_CHANNEL_RESOLUTION / 100)
-								* ARMING_THRESHOLD) {// value above the threschold
-					FAC_app_SET_current_state(FAC_STATE_NORMAL);
-				}
-			} else {
-				FAC_app_SET_current_state(FAC_STATE_NORMAL);// always armed if no arming channel active
+		// the arming REQUEST and the arming DECISION are two different things: the request is what
+		// the pilot asked for, the decision also needs the imu calibration gate below to let go
+		uint8_t armingCh = FAC_settings_GET_value(
+				FAC_SETTINGS_CODE_ARMING_CHANNEL);
+		uint8_t armingRequested = FALSE;
+		if (armingCh != 0) {
+			uint16_t armingValue = FAC_std_receiver_GET_channel(armingCh);
+			armingRequested = (armingValue
+					>= (RECEIVER_CHANNEL_RESOLUTION / 100) * ARMING_THRESHOLD);// value above the threschold
+		} else {
+			armingRequested = TRUE;	// always requested if no arming channel active
+		}
+
+		static uint32_t timerTone = 0;
+		static uint32_t timerStatusLed = 0;
+		uint32_t beforeArming = HAL_GetTick();
+
+		if (FAC_std_receiver_GET_is_connected() && armingRequested) {
+			if (FAC_app_arming_calibration_passed(armingCh)) {
+				FAC_app_SET_current_state(FAC_STATE_NORMAL);
+				FAC_app_RESET_arming_calibration();	// so that a later disarm and re-arm starts clean
 			}
+		} else {
+			FAC_app_RESET_arming_calibration();	// the request dropped, forget the attempts made for it
+		}
+
+		/* THE TWO TIMERS BELOW MUST NOT DOGPILE ON A CALIBRATION ATTEMPT */
+		// an attempt blocks for about 400ms, which is longer than both periods, so both would fire
+		// the instant it returns: the disarmed beep would step right on the beep the calibration
+		// just played and the led would toggle away from what the attempt left. Harmless for the
+		// hardware, but it makes the feedback unreadable, so the timers are pushed forward instead
+		if ((uint32_t) (HAL_GetTick() - beforeArming) > DISARMED_TONE_PERIOD / 2) {
+			timerTone = HAL_GetTick();
+			timerStatusLed = HAL_GetTick();
 		}
 
 		/* DISARMED TONE */
-		static uint32_t timerTone = 0;
 		if (HAL_GetTick() - timerTone > DISARMED_TONE_PERIOD / 2) {
 			timerTone = HAL_GetTick();
 			FAC_motor_make_noise(750, DISARMED_TONE_DURATION);
 		}
 
 		/* STATUS LED BLINK */
-		static uint32_t timerStatusLed = 0;
 		if (HAL_GetTick() - timerStatusLed > DISARMED_LED_PERIOD / 2) {
 			timerStatusLed = HAL_GetTick();
 			HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
@@ -303,6 +427,9 @@ void FAC_app_init(void) {
 	FAC_settings_init(FIRMWARE_VERSION_TAG);/// first load all settings than initialize all modules
 
 	/* INERTIAL MESUREMENT UNIT INIT */
+	/* IDENTIFY AND CONFIGURE THE SENSOR ONLY, THE CALIBRATION BELONGS TO THE ARMING */
+	// at power up the robot may still be in the hand of its operator, and gyro offsets measured on
+	// a moving body stay wrong for the whole run, see FAC_app_arming_calibration_passed
 	for (int i = 0; i < 100; i++) {	// wait for 1000ms (stabilization of the supply voltage)
 		HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 		HAL_Delay(10);
@@ -312,18 +439,18 @@ void FAC_app_init(void) {
 	FAC_IMU_init_accelerometer();
 	FAC_IMU_init_gyroscope();
 	if (FAC_IMU_GET_status() != HAL_OK) {
-		for (int i = 0; i < 20; i++) {
+		for (int i = 0; i < 20; i++) {	// the imu is non fatal, the firmware keeps going without it
 			HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
 			HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 			HAL_Delay(200);
 		}
-	} else {
-		FAC_IMU_compute_gyro_offset();
 	}
+
 	/* INIT SETTING RELATED MODULES */
 	FAC_app_init_all_modules();
 
 	/* INITIALIZE APP STRUCT */
+	FAC_app_RESET_arming_calibration();
 	fac_application.is_low_battery = FALSE;
 	FAC_app_SET_current_state(FAC_STATE_DISARMED);
 	FAC_app_SET_battery_type(FAC_battery_GET_type(FAC_battery_GET_voltage()));

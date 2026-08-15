@@ -107,7 +107,7 @@ static Setting settings[FAC_SETTINGS_CODE_LAST] = {	// insert every single setti
 	{ FAC_SETTINGS_CODE_MAPPER_S2, 0, 0, 200+10 },
 
 	/* FIRMWARE VERSION */
-	{ FAC_SETTINGS_CODE_FIRMWARE_VERSION, 20000, 0, UINT16_MAX},	// 20513 -> 2.05.13 <major>,<minor>,<patch>
+	{ FAC_SETTINGS_CODE_FIRMWARE_VERSION, FIRMWARE_VERSION_VALUE, 0, UINT16_MAX},	// 20513 -> 2.05.13 <major>,<minor>,<patch>
 
 	/* BATTERY CALIBRATION */
 	{ FAC_SETTINGS_CODE_BATTERY_CALIBRATION, 0, 0, UINT16_MAX}	// this is saved as int16_t so with sign
@@ -159,12 +159,19 @@ static void FAC_settings_STORE_ALL_to_eeprom(void) {
 	}
 }
 
-static void FAC_settings_STORE_new_firmware_version(uint8_t major,
-		uint8_t minor, uint8_t patch) {
-	uint16_t newVersion = (major * 10000) + (minor * 100) + patch;// 20513 -> 2.05.13 <major>,<minor>,<patch>
+/*
+ * @brief		Align the firmware version setting to the version of the firmware that is running
+ * @IMPORTANT	The settings array has to be updated too, not only the eeprom: the array is what the
+ * 				fac tool reads back (FAC_settings_USB_SEND_setting_value), so writing the eeprom
+ * 				alone would keep answering with the version loaded at boot, one version behind
+ * @note		Must run AFTER the eeprom load/store of FAC_settings_init, otherwise the value it
+ * 				writes is overwritten by the load (or by the defaults store on a version bump)
+ */
+static void FAC_settings_STORE_new_firmware_version(uint16_t newVersion) {
 	uint16_t currentVersion = FAC_settings_GET_value(
 			FAC_SETTINGS_CODE_FIRMWARE_VERSION);
 	if (newVersion != currentVersion) {
+		FAC_settings_SET_value(FAC_SETTINGS_CODE_FIRMWARE_VERSION, newVersion);
 		FAC_eeprom_store_value(FAC_SETTINGS_CODE_FIRMWARE_VERSION, newVersion);
 	}
 }
@@ -429,10 +436,6 @@ void FAC_settings_USB_SEND_setting_ranges(uint8_t code) {
 }
 
 void FAC_settings_init(uint8_t bootValue) {
-	/* FIRMWARE VERSION UPDATE */
-	FAC_settings_STORE_new_firmware_version(FIRMWARE_VERSION_MAJOR,
-	FIRMWARE_VERSION_MINOR, FIRMWARE_VERSION_PATCH);
-
 	/* SETTINGS LOAD */
 	FAC_eeprom_init(bootValue);		// set the "first boot" value
 	if (FAC_eeprom_is_first_time()) {// if the eeprom doesn´t contain any settings yet
@@ -462,6 +465,11 @@ void FAC_settings_init(uint8_t bootValue) {
 			HAL_Delay(50);
 		}
 	}
+
+	/* FIRMWARE VERSION UPDATE */
+	// after the load: the version comes from the firmware, not from what the eeprom happens to hold
+	FAC_settings_STORE_new_firmware_version(FIRMWARE_VERSION_VALUE);
+
 	FAC_battery_SET_calibration_offset(
 			FAC_settings_GET_value(FAC_SETTINGS_CODE_BATTERY_CALIBRATION));
 }

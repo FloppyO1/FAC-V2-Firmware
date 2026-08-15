@@ -140,6 +140,17 @@ typedef struct LSM6DS3{
 	uint8_t who_am_i;							// the id the chip actually answered with, kept for diagnosis
 }LSM6DS3;
 
+// What a "stand still" measurement window saw, in raw counts. The driver only measures and
+// reports: whether the window is still enough to be trusted, and what to do with the numbers,
+// is decided by fac_imu. The spans (max - min over the window) are the motion detector, a mean
+// alone cannot tell a robot standing on a floor from one being carried across the arena
+typedef struct LSM6DS3_still_measure{
+	int16_t gyro_mean[LSM6DS3_AXIS_NUMBER];		// x, y, z average over the window, offsets NOT applied
+	int16_t accel_mean[LSM6DS3_AXIS_NUMBER];	// x, y, z average over the window
+	uint16_t gyro_span[LSM6DS3_AXIS_NUMBER];	// x, y, z max - min over the window
+	uint16_t accel_span[LSM6DS3_AXIS_NUMBER];	// x, y, z max - min over the window
+}LSM6DS3_still_measure;
+
 enum AXIS{
 	X_AXIS,
 	Y_AXIS,
@@ -153,6 +164,7 @@ HAL_StatusTypeDef LSM6DS3_init_gyro(LSM6DS3 *LSM6DS3object);
 HAL_StatusTypeDef LSM6DS3_update_all_values(LSM6DS3 *LSM6DS3object);
 HAL_StatusTypeDef LSM6DS3_update_accelerometer_all_values(LSM6DS3 *LSM6DS3object);
 HAL_StatusTypeDef LSM6DS3_update_gyroscope_all_values(LSM6DS3 *LSM6DS3object);
-HAL_StatusTypeDef LSM6DS3_calculate_offset(LSM6DS3 *LSM6DS3object);
+HAL_StatusTypeDef LSM6DS3_measure_still(LSM6DS3 *LSM6DS3object, LSM6DS3_still_measure *out);
+void LSM6DS3_SET_gyro_offsets(LSM6DS3 *LSM6DS3object, const int16_t offsets[LSM6DS3_AXIS_NUMBER]);
 
 #endif /* INC_MYCODE_LSM6DS3_H_ */

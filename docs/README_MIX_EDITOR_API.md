@@ -454,6 +454,19 @@ int32_t FAC_IMU_GET_accel_Z_mg(void);
 int32_t FAC_IMU_GET_gyro_X_mdps(void);         /* milli deg/s,    1 dps = 1000 */
 int32_t FAC_IMU_GET_gyro_Y_mdps(void);
 int32_t FAC_IMU_GET_gyro_Z_mdps(void);
+
+/* levelled data — world frame: X forward, Y left, Z up. See "The level frame" below */
+uint8_t FAC_IMU_GET_is_calibrated(void);
+int32_t FAC_IMU_GET_accel_level_raw(uint8_t axis);
+int32_t FAC_IMU_GET_gyro_level_raw (uint8_t axis);
+int16_t FAC_IMU_GET_up(uint8_t axis);          /* the calibrated vertical in BODY coords, 1000 = 1.0 */
+int32_t FAC_IMU_GET_tilt_angle(void);          /* binary angle, 0 = as armed, 2048 = flipped */
+uint8_t FAC_IMU_GET_is_upside_down(void);
+int32_t FAC_IMU_GET_yaw_rate_mdps(void);       /* true rate about the calibrated vertical */
+
+/* heading — OPT-IN, integrated only by these calls. See "Heading" below */
+int32_t FAC_IMU_GET_heading(void);             /* binary angle, RELATIVE and DRIFTING */
+void    FAC_IMU_RESET_heading(void);
 ```
 
 **Three rules, all mandatory:**
@@ -478,6 +491,77 @@ Milli-degrees and not whole degrees on purpose: the sensitivity is a whole **70 
 > ```
 
 **Axis enum** (from `Libraries/LSM6DS3.h`): `X_AXIS = 0`, `Y_AXIS = 1`, `Z_AXIS = 2`.
+
+#### The level frame
+
+The IMU is calibrated **when the robot is armed**, not at boot — at power-up it may still be in the operator's hand. The calibration zeroes the gyro *and* measures which way is really up, then builds a right-handed world frame (`X` forward, `Y` left, `Z` **truly vertical whatever the mounting angle of the board**). The levelled accessors are the body reading projected on that frame.
+
+> **Rule 4 — levelled data is meaningless unless `FAC_IMU_GET_is_calibrated()` is `TRUE`.** Before a successful calibration the frame is the **identity**, so `FAC_IMU_GET_accel_level_raw()` / `_gyro_level_raw()` return the board's own axes. That is a defined, harmless fallback — not garbage, not zeros — but it is *not* levelled, and a graph that assumes vertical Z will be wrong by the mounting angle. **The generator must emit an `FAC_IMU_GET_is_calibrated()` guard** alongside the status guard of rule 2 for any block that depends on the frame being real.
+
+Two physics limits the tool must not try to design around:
+
+- **Yaw is unobservable from gravity.** A stationary accelerometer fixes roll and pitch only; rotating about the vertical does not change the reading by one count, and there is no magnetometer on this board. There is therefore **no absolute heading block** to offer. What exists is an integrated one, below.
+- **An accelerometer bias cannot be calibrated from a single pose** — bias and tilt give the same reading. Nothing tries to. The frame is what removes the apparent offset of a tilted mounting, which is the part that actually mattered.
+
+| Accessor | Units and range | Cost |
+|---|---|---|
+| `FAC_IMU_GET_is_calibrated()` | `TRUE` / `FALSE` | free field read |
+| `FAC_IMU_GET_accel_level_raw(axis)` | Raw accel counts on the world frame. **`int32_t`**: a projection keeps the vector magnitude, up to `32767·√3 ≈ 56755`, which does not fit `int16_t`. Returns `0` for `axis >= 3` | 9 multiplies + **3 divisions**, then free for the rest of the sensor read |
+| `FAC_IMU_GET_gyro_level_raw(axis)` | Raw gyro counts on the world frame, same range and contract. Offsets already applied | same, cached **separately** from the accelerometer |
+| `FAC_IMU_GET_up(axis)` | The calibrated vertical in **body** coordinates, scale 1000. `(0, 0, 1000)` = board mounted flat. Returns `0` for `axis >= 3` | free field read |
+| `FAC_IMU_GET_yaw_rate_mdps()` | milli deg/s about the calibrated vertical (`levelled gyro Z × 70`) | the gyro projection, **0 further divisions** |
+| `FAC_IMU_GET_is_upside_down()` | `TRUE` past 90° of tilt. It is the **sign of the levelled Z**, exactly that test with no trigonometry. **No hysteresis** — add your own or it chatters on an edge | the accel projection |
+| `FAC_IMU_GET_tilt_angle()` | Binary angle `[0, 2048]`: `0` = the attitude it was armed in, `1024` = on its side, `2048` = flipped. An accelerometer angle, so it says nothing during an impact | the accel projection + `sqrt` + **6 divisions** (`atan2`) |
+
+**The cost is paid lazily and once.** `FAC_IMU_update()` projects nothing; the projections happen inside the accessors and are cached against the sensor read, so calling six of them in one pass costs one projection each for accel and gyro, not six. A graph that never asks for levelled data pays **exactly zero** for this whole feature.
+
+> `FAC_IMU_GET_yaw_rate_mdps()` is the accessor worth reaching for first. `FAC_IMU_GET_gyro_raw(Z_AXIS)` is the board's Z, which is only the robot's yaw axis if the FAC happens to be mounted perfectly flat; this one is the real thing on any mounting.
+
+#### Heading — opt-in, and it drifts
+
+```c
+int32_t heading = FAC_IMU_GET_heading();   /* binary angle [0, 4095], feeds FAC_math_sin/cos directly */
+FAC_IMU_RESET_heading();                   /* zero it and resynchronise its clock */
+```
+
+**The integrator lives inside `FAC_IMU_GET_heading()`.** Each call integrates the current yaw rate over the time since the previous call, so a graph calling it once per pass gets a correct integral and a firmware where no graph calls it pays nothing. The contract:
+
+- **Call `FAC_IMU_update()` first**, in the same pass, or the rate being integrated is arbitrarily old (rule 1 applies unchanged).
+- **Call it once per pass, at most.** Two calls in one pass are not an error — the second sees `dt == 0` and returns the stored value without integrating — but read it into a local rather than calling it repeatedly.
+- **It is relative and it drifts.** The origin is where the front of the board pointed at the last calibration or reset, never an absolute direction. Expect a residual of the order of **0.5 to 2 °/s** with a good calibration. A graph must not treat it as a bearing that stays valid over a whole match; use it for short-term hold, not navigation.
+- **The gap rule.** If more than 100 ms passed since the previous call, the gap is **not** integrated: the timestamp is resynchronised and the stored angle returned unchanged. The same happens on the very first call and on any call while `FAC_IMU_GET_status() == HAL_ERROR`. One rate sample says nothing about a three-second hole — and the hole is real, since the chain stops running on disarm ([§ 9.4](#94-the-disarm-gap)). A graph resuming after a disarm therefore gets a heading that is *stale*, not one that jumped: reset it in the staleness guard of § 9.4 if the graph cares.
+- `FAC_IMU_RESET_heading()` is what a heading-hold graph calls whenever the pilot commands a turn — "straight ahead" is wherever it was last reset.
+
+#### Worked example — automatic throttle inversion
+
+An invertible robot whose drive reverses by itself once it lands upside down. Guards first, then one multiplication; no division, no trigonometry, and nothing is paid when the IMU is absent.
+
+```c
+/* CUSTOM INCLUDE */
+#include "FAC_Code/fac_imu.h"
+
+/* ... inside the update function, INSERT YOUR CODE HERE region ... */
+static int8_t sign = 1;                         /* held across passes, see § 9.1 */
+
+FAC_IMU_update();                               /* rule 1: the main loop does NOT do this */
+
+if (FAC_IMU_GET_status() != HAL_ERROR && FAC_IMU_GET_is_calibrated()) {
+    /* the levelled Z sign IS the "past 90 degrees" test, at no trigonometric cost.
+     * Hysteresis on the vertical component itself, because is_upside_down() has none
+     * and a robot balancing on an edge would otherwise flip the drive at 1 kHz.
+     * 500 counts is about 0.25 g of vertical, roughly 14 degrees either side of flat */
+    int32_t vertical = FAC_IMU_GET_accel_level_raw(Z_AXIS);
+    if (vertical >  500) sign =  1;
+    if (vertical < -500) sign = -1;
+}
+/* IMU missing, failed, or never calibrated: sign keeps its last value (1 at boot),
+ * so the drive behaves exactly as it would on a board with no IMU at all */
+
+outputs[OUTPUT_LEFT]  = FAC_math_scale(inputs[INPUT_LEFT],  sign * 100);
+outputs[OUTPUT_RIGHT] = FAC_math_scale(inputs[INPUT_RIGHT], sign * 100);
+```
+
+Three things in it are the pattern rather than the detail: the **two guards** (status *and* calibration) with a defined fallback behind them, the **hysteresis added by the graph** because the accessor deliberately has none, and the state being a plain `static` that survives an *apply settings* and a disarm ([§ 9.1](#91-where-state-lives), [§ 9.4](#94-the-disarm-gap)) — which here is what you want, since the robot is still upside down after a re-arm.
 
 > **Gyro full scale is ±2000 dps ≈ 333 RPM.** Enough for stabilisation or self-righting, but a melty brain saturates it well below working speed. The usual alternative is centripetal acceleration (`ω = √(a/r)`), bounded in turn by the ±16 g accelerometer and by how far from the spin axis the IMU sits. The integer square root a graph doing this needs is **`FAC_math_sqrt`** ([§ 7.4](#74-group-2--raw-fixed-point)) — exact, no division, a fixed 16 steps. What the graph has to get right is the **units**, because the root halves the scale: `sqrt(x * scale)` is `sqrt(x) * sqrt(scale)`, so to keep the result on the scale the input was in, the input must be multiplied by that scale once more before the call, and the product must still fit `int32_t` (under ~2×10⁹). For `ω = √(a/r)` that is exactly where the choice is made: **centi-radians per second fit, milli-radians per second overflow.**
 
@@ -648,6 +732,8 @@ This is the trap that only shows on hardware. Because the chain runs **only in `
 - a slew limiter still at its last ramped value, so the first pass after re-arm jumps by one `step` from a value that no longer reflects the sticks;
 - a filter holding a sample from an arbitrarily long time ago;
 - a timer whose `t0` is now far in the past, so **every pending interval fires at once** on the first pass back.
+
+The one thing that does **not** need the guard is the heading of [§ 8.1](#81-imu--fac_codefac_imuh): `FAC_IMU_GET_heading()` carries its own gap rule and refuses to integrate a hole longer than 100 ms, so it comes back *stale* rather than jumping. A graph that wants it zeroed on re-arm still has to say so, with `FAC_IMU_RESET_heading()` inside the guard below. Note also that a re-arm **re-runs the IMU calibration**, so on the first pass back the gyro offsets and the level frame may not be the ones the graph was using before the disarm.
 
 The fix is a staleness guard the generator should emit for any graph holding state. One extra `static` covers all of it:
 

@@ -19,9 +19,10 @@ static const uint8_t DevAddress = 0x6A;	// 0x6A if SA0 = LOW, 0x6B if SA0 = HIGH
 
 // A power of two on purpose: the average is then a shift instead of a call to __aeabi_idiv, which
 // is what a division is on a Cortex-M0. 128 samples spaced just above the 2.4ms of the 416Hz
-// output data rate cost about 400ms of boot and divide the residual offset error by 11
-#define GYRO_OFFSET_SAMPLES 128
-#define GYRO_OFFSET_SAMPLE_PERIOD 3	// ms, above the 2.4ms of the output data rate so no sample is read twice
+// output data rate cost about 400ms and divide the residual noise of the mean by 11
+#define STILL_MEASURE_SAMPLES 128
+#define STILL_MEASURE_SAMPLE_PERIOD 3	// ms, above the 2.4ms of the output data rate so no sample is read twice
+#define STILL_MEASURE_AXIS_NUMBER (LSM6DS3_AXIS_NUMBER * 2)	// gyro then accelerometer, as they come out of the burst read
 
 /* STATIC FUNCTION PROTORYPES */
 static HAL_StatusTypeDef read_registers(LSM6DS3 *LSM6DS3object, uint8_t regFirstAddress, uint8_t *data, uint16_t size);
@@ -190,36 +191,74 @@ HAL_StatusTypeDef LSM6DS3_update_gyroscope_all_values(LSM6DS3 *LSM6DS3object) {
 }
 
 /**
- * @brief	Calculate new offset for gyro
- * @note	A true average of GYRO_OFFSET_SAMPLES readings, accumulated on int32_t. It used to be
- * 			written as "average = (average + sample) / 2" inside the loop, which is not an average
- * 			at all but an exponential filter with a weight of one half: whatever the sample count,
- * 			its residual noise is that of averaging three readings, and every division truncated
- * 			a little more of the result away
- * @note	The robot must stand still for the whole call, there is no way to tell a zero rate
- * 			offset from a real rotation. Blocks for about 400ms and refreshes the watchdog
- * @retval	HAL_ERROR if any reading failed, and in that case the offsets are left at zero: half
- * 			an average is worse than none, it would be subtracted from every later reading
+ * @brief	Measure both sensors over a window in which the robot is meant to stand still, and
+ * 			report what was seen without deciding anything about it
+ * @note	The driver stays a register interface: it hands back the mean and the span of every
+ * 			axis, and fac_imu is what judges whether the window was still enough to be trusted,
+ * 			derives the gyroscope offsets from it and builds the orientation reference out of it
+ * @note	ONE burst read per sample, twelve bytes, so the gyroscope and the accelerometer are
+ * 			averaged over the very same window at no extra cost on the bus. The offset loop this
+ * 			replaced read the gyroscope block alone, which is what used to make the accelerometer
+ * 			mean an extra transaction rather than a free by-product
+ * @note	A true average, accumulated on int32_t and divided once at the end. It must not go back
+ * 			to "average = (average + sample) / 2" inside the loop, which is not an average at all
+ * 			but an exponential filter with a weight of one half: whatever the sample count, its
+ * 			residual noise is that of averaging three readings
+ * @note	The offsets are zeroed first, so what is measured is the bare sensor and not what a
+ * 			previous calibration already corrected. Blocks for about 400ms and refreshes the
+ * 			watchdog, which is a ~400ms one
+ * @retval	HAL_ERROR if any reading failed, and in that case out is left untouched and the offsets
+ * 			stay at zero: half an average is worse than none, it would be subtracted from every
+ * 			later reading. The caller decides what to put back
  */
-HAL_StatusTypeDef LSM6DS3_calculate_offset(LSM6DS3 *LSM6DS3object) {
-	int32_t sum[LSM6DS3_AXIS_NUMBER] = { 0 };
-	uint8_t data[AXIS_BLOCK_SIZE];
+HAL_StatusTypeDef LSM6DS3_measure_still(LSM6DS3 *LSM6DS3object, LSM6DS3_still_measure *out) {
+	int32_t sum[STILL_MEASURE_AXIS_NUMBER] = { 0 };
+	int16_t minimum[STILL_MEASURE_AXIS_NUMBER] = { 0 };
+	int16_t maximum[STILL_MEASURE_AXIS_NUMBER] = { 0 };
+	uint8_t data[BOTH_SENSORS_BLOCK_SIZE];
+
+	if (out == NULL)
+		return HAL_ERROR;
 
 	for (int i = 0; i < LSM6DS3_AXIS_NUMBER; i++)
 		LSM6DS3object->gyro_offsets[i] = 0;	// measure the bare sensor, not what a previous run already corrected
 
-	for (int sample = 0; sample < GYRO_OFFSET_SAMPLES; sample++) {
-		if (read_registers(LSM6DS3object, OUTX_L_G, data, AXIS_BLOCK_SIZE) != HAL_OK) {
+	for (int sample = 0; sample < STILL_MEASURE_SAMPLES; sample++) {
+		if (read_registers(LSM6DS3object, OUTX_L_G, data, BOTH_SENSORS_BLOCK_SIZE) != HAL_OK) {
 			return HAL_ERROR;
 		}
-		for (int i = 0; i < LSM6DS3_AXIS_NUMBER; i++)
-			sum[i] += decode_axis(data, i);	// GYRO_OFFSET_SAMPLES full scale readings still fit in int32_t with room to spare
-		HAL_Delay(GYRO_OFFSET_SAMPLE_PERIOD);
+		for (int i = 0; i < STILL_MEASURE_AXIS_NUMBER; i++) {
+			int16_t value = decode_axis(data, i);
+			sum[i] += value;// STILL_MEASURE_SAMPLES full scale readings still fit in int32_t with room to spare
+			if (sample == 0 || value < minimum[i])
+				minimum[i] = value;
+			if (sample == 0 || value > maximum[i])
+				maximum[i] = value;
+		}
+		HAL_Delay(STILL_MEASURE_SAMPLE_PERIOD);
 		HAL_IWDG_Refresh(&hiwdg);	// refresh the watchdog	(~400ms)
 	}
 
-	for (int i = 0; i < LSM6DS3_AXIS_NUMBER; i++)
-		LSM6DS3object->gyro_offsets[i] = (int16_t) saturate_to_int16(-divide_rounded(sum[i], GYRO_OFFSET_SAMPLES));
+	for (int i = 0; i < LSM6DS3_AXIS_NUMBER; i++) {
+		int accel = i + LSM6DS3_AXIS_NUMBER;	// the accelerometer block follows the gyroscope one in the buffer
+		out->gyro_mean[i] = (int16_t) saturate_to_int16(divide_rounded(sum[i], STILL_MEASURE_SAMPLES));
+		out->accel_mean[i] = (int16_t) saturate_to_int16(divide_rounded(sum[accel], STILL_MEASURE_SAMPLES));
+		// the widest possible span is 65535, which is exactly what a uint16_t holds
+		out->gyro_span[i] = (uint16_t) (maximum[i] - minimum[i]);
+		out->accel_span[i] = (uint16_t) (maximum[accel] - minimum[accel]);
+	}
 
 	return HAL_OK;
+}
+
+/**
+ * @brief	Install the per axis gyroscope corrections that every update function adds to a reading
+ * @note	These are corrections and not measurements: the caller passes the negated mean of a
+ * 			still measure, not the mean itself
+ */
+void LSM6DS3_SET_gyro_offsets(LSM6DS3 *LSM6DS3object, const int16_t offsets[LSM6DS3_AXIS_NUMBER]) {
+	if (offsets == NULL)
+		return;
+	for (int i = 0; i < LSM6DS3_AXIS_NUMBER; i++)
+		LSM6DS3object->gyro_offsets[i] = offsets[i];
 }
