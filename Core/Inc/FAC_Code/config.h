@@ -57,7 +57,7 @@
 // the first boot after this update, which the 10 fast boot blinks announce
 #define FIRMWARE_VERSION_MAJOR 2	// [MAX 9] 	add one here, if the changes are substantial and not backwards compatible
 #define FIRMWARE_VERSION_MINOR 1	// [MAX 99] add one here, if new backwards compatible features have been added
-#define FIRMWARE_VERSION_PATCH 0	// [MAX 99] add one here, if any issues have been fixed without adding any features
+#define FIRMWARE_VERSION_PATCH 1	// [MAX 99] add one here, if any issues have been fixed without adding any features
 
 #define FIRMWARE_VERSION_TAG  (uint8_t)((FIRMWARE_VERSION_MAJOR * 101U + FIRMWARE_VERSION_MINOR * 7U + FIRMWARE_VERSION_PATCH * 3U) % 255U)
 
