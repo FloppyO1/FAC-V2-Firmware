@@ -95,6 +95,8 @@ typedef int32_t fac_value_t;
 
 The `±1000` scale is **not arbitrary**. It equals `RECEIVER_CHANNEL_RESOLUTION`, `MOTOR_SPEED_RESOLUTION` and `SERVO_POSITION_RESOLUTION` (all `1000`, all in `config.h`), so the conversions at both ends of the chain are exact and nothing is rounded away.
 
+Two of the three are exact without qualification: the receiver input is `2×rx - 1000` and the motor speed is the identity on `|value|`. The **servo** is the one exception — its mapper targets `MAX_SERVO_VALUE` (`999`), because that is the divisor of the pulse formula, so the map trades half a step at the centre (`value = 0` → position `499`) for a map that is uniform across the whole travel. See § 3.2.
+
 ### 3.2 What a value means at the device end
 
 The mapper converts a normalized output into device units. A generated graph does not do this itself — it only has to know what its number will mean:
@@ -102,7 +104,9 @@ The mapper converts a normalized output into device units. A generated graph doe
 | Device | Conversion applied by `fac_mapper.c` | Meaning |
 |---|---|---|
 | DC motor (M1–M3) | `dir = (v < 0) ? BACKWARD : FORWARD`, `speed = FAC_math_abs(v) * 1000 / 1000` | **sign is direction, magnitude is speed**. `0` is stopped, `±1000` is full speed |
-| Servo / ESC (S1–S2) | `position = FAC_math_to_range(v, 0, SERVO_POSITION_RESOLUTION)` | `-1000` → position `0` (one end of travel), `+1000` → position `1000` (the other end). For a servo that is 0°…180°, for an ESC 0 %…100 % |
+| Servo / ESC (S1–S2) | `position = FAC_math_to_range(v, 0, MAX_SERVO_VALUE)` | `-1000` → position `0` (one end of travel), `+1000` → position `999` (the other end). For a servo that is 0°…180°, for an ESC 0 %…100 % |
+
+The servo target is `MAX_SERVO_VALUE` (`999`), not `SERVO_POSITION_RESOLUTION`, because `999` is the divisor of the pulse formula in `fac_servo.c`. That makes the map uniform across the travel; the price is that the centre `v = 0` lands on position `499`, half a step below mechanical centre — 0,05 % of travel, unavoidable for a 1000-step device. The motor conversion stays exact: both resolutions are `1000`, so it is the identity on `|v|`, and `±1000` is a true 100 % duty.
 
 An output the user does not use must be left at `FAC_VALUE_ZERO` — the boilerplate already does that, see [§ 4](#4-anatomy-of-a-generated-mix).
 
@@ -111,11 +115,11 @@ An output the user does not use must be left at `FAC_VALUE_ZERO` — the boilerp
 Both frameworks build their inputs the same way, from a receiver channel selected by a setting:
 
 ```c
-uint16_t rxValue = FAC_std_receiver_GET_channel(chNumber);   // 0 .. 999, deadzone already applied
+uint16_t rxValue = FAC_std_receiver_GET_channel(chNumber);   // 0 .. 1000, deadzone already applied
 fac_value_t in   = FAC_math_from_range(rxValue, 0, RECEIVER_CHANNEL_RESOLUTION);
 ```
 
-With both resolutions equal to 1000 this resolves to the exact `2*rx - 1000`, with no float and no rounding. Two consequences the tool must model:
+With both resolutions equal to 1000 this resolves to the exact `2*rx - 1000`, with no float and no rounding. The channel domain is `0 … RECEIVER_CHANNEL_RESOLUTION` inclusive — **1001 values**, so the stick centre `500` gives exactly `0` and full travel is reachable at both ends. Two consequences the tool must model:
 
 - **A channel value of `0` is not "no signal", it is full negative travel** (`-1000`). The firmware has a separate connection gate (`FAC_std_receiver_GET_is_connected()`); an input value never says "no signal" by itself.
 - A slot whose input-channel setting is `0` is **disabled**, and its input is forced to `FAC_VALUE_ZERO`, not left stale.
@@ -314,7 +318,7 @@ fac_value_t FAC_mixes_GET_output(uint8_t outputNumber);   // 0-based
 
 | Function | Semantics | Who calls it |
 |---|---|---|
-| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver: normalizes `0…999` → `-1000…+1000`, applies the cached per-input reversal, forces a disabled input (channel `0`) to `FAC_VALUE_ZERO` | **The boilerplate**, once, at the top. Never call it from graph code |
+| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver: normalizes `0…1000` → `-1000…+1000`, applies the cached per-input reversal, forces a disabled input (channel `0`) to `FAC_VALUE_ZERO` | **The boilerplate**, once, at the top. Never call it from graph code |
 | `FAC_mixes_GET_input(i)` | The normalized value of input *i*. Bounds-checked: `i >= 8` returns `FAC_VALUE_ZERO` | The boilerplate fills `inputs[]`; graph code reads `inputs[i]` |
 | `FAC_mixes_update_mix_outputs(out)` | Copies the local `outputs[]` into the shared `Mixes` struct the mapper reads. **Must be the last statement** | **The boilerplate**, once, at the end |
 | `FAC_mixes_GET_output(i)` | Reads back a published output. Bounds-checked. Of no use to graph code — the local `outputs[]` array holds the current pass's values, the struct still holds the previous pass's until the write-back |
@@ -508,14 +512,14 @@ fac_value_t aux = FAC_math_from_range(FAC_adc_get_raw_channel_value(1), 0, FAC_a
 ### 8.4 Receiver — `FAC_Code/fac_std_receiver.h`
 
 ```c
-uint16_t FAC_std_receiver_GET_channel(uint8_t chNumber);   /* 1-BASED, returns 0 .. 999 */
+uint16_t FAC_std_receiver_GET_channel(uint8_t chNumber);   /* 1-BASED, returns 0 .. 1000 */
 uint8_t  FAC_std_receiver_GET_is_connected(void);
 ```
 
 The mix and function frameworks already read the receiver for their configured inputs, and that is the path a graph should normally use — the channel number then stays user-configurable through the FAC Tool. Read a channel directly **only** when the graph needs a channel the framework does not give it (a mix needing a 9th input, a special function needing a second channel).
 
 - **`chNumber` is 1-based.** `1 … RECEIVER_CHANNELS_NUMBER` (8); anything outside returns `0` without touching a backend.
-- The returned value is `0 … 999` with the deadzone already applied, and needs `FAC_math_from_range(v, 0, RECEIVER_CHANNEL_RESOLUTION)` to become normalized.
+- The returned value is `0 … RECEIVER_CHANNEL_RESOLUTION` (`0 … 1000`, 1001 values) with the deadzone already applied, and needs `FAC_math_from_range(v, 0, RECEIVER_CHANNEL_RESOLUTION)` to become normalized.
 - Each call **triggers a recalculation** from the active receiver backend — it is not a free field read. Do not call it repeatedly for the same channel in one pass; read it once into a local.
 - `FAC_std_receiver_GET_is_connected()` becomes `TRUE` once any channel has read non-zero and **never goes back to `FALSE`**. It is the arming gate, not a live link-quality signal — do not build a failsafe out of it.
 

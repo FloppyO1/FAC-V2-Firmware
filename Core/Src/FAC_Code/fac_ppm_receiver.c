@@ -59,8 +59,10 @@ void FAC_ppm_receiver_calculate_channels_values(void) {
 		if (value <= MAX_TIM2_TEORETICAL_CHANNEL_COUNT + (MAX_TIM2_TEORETICAL_CHANNEL_COUNT / 100) * 10) { // if the count is grater than a 10% the value is ignored it must be something wrong with the time capture
 			if (value < MAX_TIM2_TEORETICAL_CHANNEL_COUNT / 2)
 				value = MAX_TIM2_TEORETICAL_CHANNEL_COUNT / 2; // sometime the transmitter has a grater range than the expected, so the min value is set to 1000 to not have any problem on the calculus
-			value = map_uint32(value - (MAX_TIM2_TEORETICAL_CHANNEL_COUNT / 2), 0, MAX_TIM2_TEORETICAL_CHANNEL_COUNT / 2, 0, RECEIVER_CHANNEL_RESOLUTION - 1);
-			// if(value > RECEIVER_CHANNEL_RESOLUTION-1) value = RECEIVER_CHANNEL_RESOLUTION-1;	// not needed the value is already cropped on the map_uint32_t function
+			// the capture produces the full 0..RECEIVER_CHANNEL_RESOLUTION domain, the one the deadzone and
+			// FAC_math_from_range were always written for: 1001 values, exact centre 500
+			value = map_uint32(value - (MAX_TIM2_TEORETICAL_CHANNEL_COUNT / 2), 0, MAX_TIM2_TEORETICAL_CHANNEL_COUNT / 2, 0, RECEIVER_CHANNEL_RESOLUTION);
+			// if(value > RECEIVER_CHANNEL_RESOLUTION) value = RECEIVER_CHANNEL_RESOLUTION;	// not needed the value is already cropped on the map_uint32_t function
 			FAC_std_receiver_new_channel_value(i + 1, value);
 		}
 	}

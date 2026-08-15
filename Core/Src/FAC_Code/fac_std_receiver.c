@@ -59,8 +59,8 @@ static void FAC_std_receiver_is_connected(void) {
  */
 static uint16_t FAC_std_receiver_SET_channel(uint8_t chNumber, uint16_t value) {
 	uint16_t v = value;
-	if (v > RECEIVER_CHANNEL_RESOLUTION - 1) { // -1 because number 0 is considered so 1000 step means 0 to 999
-		v = RECEIVER_CHANNEL_RESOLUTION - 1;
+	if (v > RECEIVER_CHANNEL_RESOLUTION) {	// the domain is 0..RECEIVER_CHANNEL_RESOLUTION: 1001 values, exact centre 500
+		v = RECEIVER_CHANNEL_RESOLUTION;
 	}
 	receiver.channels[chNumber - 1] = v;
 	return v;

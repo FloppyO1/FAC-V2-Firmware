@@ -145,8 +145,9 @@ This is the heart of the firmware and the part worth understanding first.
         │  FAC_std_receiver_new_channel_value()
         ▼
 ┌───────────────────────────┐
-│ fac_std_receiver          │   channels[8], integers 0 … 999
-│  · deadzone + relinearise │   (RECEIVER_CHANNEL_RESOLUTION = 1000)
+│ fac_std_receiver          │   channels[8], integers 0 … 1000
+│  · deadzone + relinearise │   (RECEIVER_CHANNEL_RESOLUTION = 1000,
+│                           │    1001 values, exact centre 500)
 └───────────────────────────┘
         │  FAC_std_receiver_GET_channel(n)   1-based
         ▼
@@ -388,7 +389,7 @@ uint8_t  FAC_std_receiver_GET_is_connected(void);
 | Function | Description |
 |---|---|
 | `FAC_std_reciever_init` | Clears all channels and initialises the backend for `type` (`RECEIVER_TYPE_PWM` / `_PPM` / `_NRF24` / `_ELRS`). The last two are placeholders. *(Note the misspelling in the public name.)* **Returns immediately, without touching anything, if `type` is unchanged and the receiver was already initialised** — re-running the clear on a live receiver would drop its channels to `0`, which decodes as full negative travel, not "no signal" (issue #19). |
-| `FAC_std_receiver_GET_channel` | Value of channel `chNumber` (**1-based**), `0 … RECEIVER_CHANNEL_RESOLUTION-1`. Triggers a recalculation from the active backend. Channels beyond the backend's capability return the last stored value; a `chNumber` outside `1 … RECEIVER_CHANNELS_NUMBER` returns `0` without touching any backend. |
+| `FAC_std_receiver_GET_channel` | Value of channel `chNumber` (**1-based**), `0 … RECEIVER_CHANNEL_RESOLUTION` — 1001 values, exact centre `500`. Triggers a recalculation from the active backend. Channels beyond the backend's capability return the last stored value; a `chNumber` outside `1 … RECEIVER_CHANNELS_NUMBER` returns `0` without touching any backend. |
 | `FAC_std_receiver_new_channel_value` | Backend → abstraction entry point: applies the deadzone, clamps, and stores. |
 | `FAC_std_receiver_GET_is_connected` | `TRUE` once any channel has read non-zero. Polls one channel per call, round-robin over `1 … RECEIVER_CHANNELS_NUMBER`. Used as the arming gate. |
 
@@ -445,7 +446,7 @@ fac_value_t FAC_mixes_GET_output(uint8_t outputNumber);         // 0-based
 |---|---|
 | `FAC_mixes_init` | Loads the active mix ID and per-input channel/reversal settings; zeroes inputs and outputs. Requires settings to be loaded first. |
 | `FAC_mix_update` | Dispatches to the active mix's update function. Add a `case` here for each new mix. |
-| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver, normalising `0…999` → `-1000…+1000` with `FAC_math_from_range` and applying per-input reversal from the values cached by `init()`. Disabled inputs (channel `0`) become `FAC_VALUE_ZERO`. Called by the mix boilerplate. |
+| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver, normalising `0…1000` → `-1000…+1000` with `FAC_math_from_range` and applying per-input reversal. The identity `input = 2×channel - 1000` holds exactly, so full travel is reachable at both ends and the stick centre `500` gives exactly `0` from the values cached by `init()`. Disabled inputs (channel `0`) become `FAC_VALUE_ZERO`. Called by the mix boilerplate. |
 | `FAC_mixes_update_mix_outputs` | Copies a mix's local output array into the shared struct. **Must be called at the end of every mix update.** |
 | `FAC_mixes_GET_input` / `_GET_output` | Read the shared normalised arrays. Both bounds-check the index and return `FAC_VALUE_ZERO` when it is out of range — the mapper can reach them with an invalid link value (issue #17). |
 
@@ -534,7 +535,11 @@ uint8_t  FAC_servo_GET_is_reversed(uint8_t servoNumber);
 
 TIM3 is prescaled to **1000 ticks per millisecond**, so a pulse width in microseconds maps directly onto the CCR value at any frame rate; the period is recomputed as `(1000 × SERVO_RESOLUTION) / frequency`.
 
-Position → pulse width is `CCR = min_us + (span × position) / MAX_SERVO_VALUE`, where `span = max_us - min_us`. The multiplication is done in **32 bit on purpose**: the widest configurable span (2800 µs) times the maximum position (999) is ≈ 2.8 M and does not fit in 16 bit. Since `position` is clamped to `MAX_SERVO_VALUE`, full deflection reaches exactly the configured `max_us`. Note that `MAX_SERVO_VALUE` is parenthesised in the header precisely because it is used as a divisor here.
+Position → pulse width is `CCR = min_us + (span × position) / MAX_SERVO_VALUE`, where `span = max_us - min_us`. The multiplication is done in **32 bit on purpose**: the widest configurable span (2800 µs) times the maximum position (999) is ≈ 2.8 M and does not fit in 16 bit. Note that `MAX_SERVO_VALUE` is parenthesised in the header precisely because it is used as a divisor here.
+
+The mapper feeds this with `FAC_math_to_range(value, 0, MAX_SERVO_VALUE)` (`fac_mapper.c`), i.e. `position = (value + 1000) / 2 × 999 / 1000` over the normalised `-1000 … +1000`. Targeting `MAX_SERVO_VALUE` rather than `SERVO_POSITION_RESOLUTION` is what makes the map **uniform** over the travel: the earlier expression put `998`, `999` and `1000` all on position `999`, a three-value flat spot at the top that the clamp below was hiding. Full deflection therefore reaches exactly the configured `max_us`, and the centre `value = 0` lands on position `499` — half a step below mechanical centre, 0,05 % of travel, unavoidable for a 1000-step device with no exact middle.
+
+The `FAC_servo_SET_position` clamp to `MAX_SERVO_VALUE` is **load-bearing, not defensive**: it is the divisor of the formula above, so a position of `1000` would produce a pulse beyond `max_us`.
 
 
 ### 8.11 `fac_adc` — analog front end

@@ -65,3 +65,5 @@ $RECYCLE.BIN/
 # --- Misc ------------------------------------------------------------------
 *.log
 *.stackdump
+FAC_Firmware_V2 Debug.launch
+FAC_Firmware_V2 Debug.cfg
