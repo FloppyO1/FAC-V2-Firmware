@@ -445,6 +445,7 @@ Everything in this section is **outside** the mix/function framework. A graph th
 
 ```c
 HAL_StatusTypeDef FAC_IMU_GET_status(void);
+uint8_t FAC_IMU_GET_is_initialized(void);      /* init chain completed; says nothing about the last read */
 void    FAC_IMU_update(void);                  /* the ONLY call that touches the I2C bus */
 int16_t FAC_IMU_GET_accel_raw(uint8_t axis);   /* axis is X_AXIS / Y_AXIS / Z_AXIS */
 int16_t FAC_IMU_GET_gyro_raw (uint8_t axis);

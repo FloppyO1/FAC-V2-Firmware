@@ -606,6 +606,7 @@ HAL_StatusTypeDef FAC_IMU_init(void);
 void FAC_IMU_init_accelerometer(void);
 void FAC_IMU_init_gyroscope(void);
 HAL_StatusTypeDef FAC_IMU_GET_status(void);
+uint8_t FAC_IMU_GET_is_initialized(void);      // TRUE once the init chain went through; says nothing about the last read
 void    FAC_IMU_update(void);                  // the only call that touches the bus
 int16_t FAC_IMU_GET_accel_raw(uint8_t axis);   // raw counts, axis is X_AXIS / Y_AXIS / Z_AXIS
 int16_t FAC_IMU_GET_gyro_raw (uint8_t axis);
@@ -873,14 +874,14 @@ Virtual COM port (CDC). The host sends a small command packet; the device answer
 | 1 | `READ_RANGE` | `[1, code]` | `[1, code, minMSB, minLSB, maxMSB, maxLSB]` |
 | 2 | `WRITE` | `[2, code, valMSB, valLSB]` | `73` (ack) |
 | 3 | `PING` | `[3]` | `73` (ack) |
-| 4 | `TELEMETRY_REQUEST` | `[4]` | 27-byte telemetry packet |
+| 4 | `TELEMETRY_REQUEST` | `[4]` | 34-byte telemetry packet (27 bytes up to 2.0.x) |
 | 5 | `TELEMETRY_RESPONSE` | — | (marker byte of the telemetry packet) |
 | 6 | `SAVE_TO_EEPROM` | `[6]` | `73` (ack) |
 | 7 | `APPLY_SETTINGS` | `[7]` | `73` (ack) |
 
 `WRITE` only updates RAM. `SAVE_TO_EEPROM` persists; `APPLY_SETTINGS` re-runs `FAC_app_init_all_modules()` so changes take effect without a reboot. The ack byte is `73` (`0x49`).
 
-### Telemetry packet (27 bytes)
+### Telemetry packet (34 bytes)
 
 | Offset | Size | Content |
 |---|---|---|
@@ -892,10 +893,21 @@ Virtual COM port (CDC). The host sends a small command packet; the device answer
 | 21–22 | 2 | Accel X in mg (**signed**) |
 | 23–24 | 2 | Accel Y in mg (**signed**) |
 | 25–26 | 2 | Accel Z in mg (**signed**) |
+| 27–28 | 2 | Gyro X in 0.1 dps (**signed**) |
+| 29–30 | 2 | Gyro Y in 0.1 dps (**signed**) |
+| 31–32 | 2 | Gyro Z in 0.1 dps (**signed**) |
+| 33 | 1 | IMU status: bit 0 `WORKING`, bit 1 `CALIBRATED`, bits 2–7 reserved (sent as 0) |
+
+Bytes 27–33 were added in **2.1.0** and are appended, so the first 27 bytes are exactly the packet a 2.0.x board sends; the FAC Tool chooses the length it expects from `FIRMWARE_VERSION` (code 62). The command and the version number are unchanged.
+
+- **Accel and gyro are body axes** (X towards the front edge, opposite the USB; Y left; Z towards the component side; positive rotation counter-clockwise looking from the tip of the axis), with the calibration offsets applied — the `_raw` accessors, **not** the levelled ones.
+- Gyro is `FAC_IMU_GET_gyro_*_mdps() / 100`: the full scale (`32768 × 70 mdps ≈ ±2293 dps`) is `±22937`, which fits `int16_t` without saturating.
+- `WORKING` = `FAC_IMU_GET_is_initialized() && FAC_IMU_GET_status() == HAL_OK`, evaluated **after** the `FAC_IMU_update()` of the same request, so it describes the values in this packet. `CALIBRATED` = `FAC_IMU_GET_is_calibrated()`. The bit masks are `TELEMETRY_IMU_STATUS_*` in `fac_settings.h`.
+- With `WORKING = 0` accel and gyro are **sent as 0**: a dead sensor keeps its last reading, which would otherwise look like a robot standing perfectly still.
 
 > Keep this table, the comment above `FAC_settings_USB_SEND_telemetry()`, and the FAC Tool in sync.
 
-With `IM_TESTING_FAC_TOOL` defined, all telemetry fields are **simulated** (channels ramp, voltage cycles through 1S–4S values, state cycles) so the tool can be developed without a robot.
+With `IM_TESTING_FAC_TOOL` defined, all telemetry fields are **simulated** (channels ramp, voltage cycles through 1S–4S values, state cycles, accel ramps, gyro ramps on `-500…499` tenths of dps, IMU status fixed at `0x03`) so the tool can be developed without a robot.
 
 ---
 

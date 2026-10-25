@@ -198,7 +198,7 @@ static uint16_t FAC_settings_bytes_to_uint16(const uint8_t *array) {
 
 /*
  * @brief	Send the telemetry via USB serial
- * @note	Telemetry message is composed by (21 bytes):
+ * @note	Telemetry message is composed by (34 bytes):
  * 			1B	Telemetry RES code											0
  * 			2B	ch1,2,3,4,5,6,7,8	(two byte each)							1-2, 3-4, 5-6, 7-8, 9-10, 11-12, 13-14, 15-16
  * 			2B	Vbat [mV]													17-18
@@ -207,9 +207,17 @@ static uint16_t FAC_settings_bytes_to_uint16(const uint8_t *array) {
  * 			2B	accel X	[mg]												21-22
  * 			2B	accel Y	[mg]												23-24
  * 			2B	accel Z	[mg]												25-26
+ * 			2B	gyro X	[0.1dps]											27-28
+ * 			2B	gyro Y	[0.1dps]											29-30
+ * 			2B	gyro Z	[0.1dps]											31-32
+ * 			1B	IMU status (bit 0 WORKING, bit 1 CALIBRATED, others 0)		33
+ * @note	Bytes 27-33 came with 2.1.0 and are appended, so the first 27 bytes are the same packet
+ * 			a 2.0.x board sends. The FAC Tool picks the length it expects from FIRMWARE_VERSION
+ * @note	Accel and gyro are the BODY axis with the calibration offsets applied (the _raw
+ * 			accessors), not the levelled ones. Both are sent as 0 when the IMU is not WORKING
  */
 static void FAC_settings_USB_SEND_telemetry(void) {
-	uint8_t telemetryPacket[27];
+	uint8_t telemetryPacket[34];	// 27 + gyro x/y/z (6) + imu status (1), fits one 64 byte USB FS packet
 	/* telemetry res code */
 	telemetryPacket[0] = FAC_USB_COMMAND_TELEMETRY_RESPONSE;
 	/* receiver channels */
@@ -265,22 +273,37 @@ static void FAC_settings_USB_SEND_telemetry(void) {
 	telemetryPacket[20] = states;
 #endif
 
+	/* imu status */				// bit 0 WORKING, bit 1 CALIBRATED, the others reserved (0)
+	uint8_t imuStatus = 0;
+#ifndef IM_TESTING_FAC_TOOL
+	FAC_IMU_update();	// one i2c transaction for all six axis, the six reads below then cost nothing
+	// read after the update, so WORKING describes the values that are about to be sent
+	if (FAC_IMU_GET_is_initialized() && FAC_IMU_GET_status() == HAL_OK)
+		imuStatus |= TELEMETRY_IMU_STATUS_WORKING;
+	if (FAC_IMU_GET_is_calibrated())
+		imuStatus |= TELEMETRY_IMU_STATUS_CALIBRATED;
+#else
+	imuStatus = TELEMETRY_IMU_STATUS_WORKING | TELEMETRY_IMU_STATUS_CALIBRATED;
+#endif
+	telemetryPacket[33] = imuStatus;
+
 	/* accelerometer */
 	uint8_t accel[2];
 #ifndef IM_TESTING_FAC_TOOL
-	FAC_IMU_update();	// one i2c transaction for all six axis, the three reads below then cost nothing
+	// a dead sensor still holds its last reading, which would look like a robot standing still
+	uint8_t imuWorking = (imuStatus & TELEMETRY_IMU_STATUS_WORKING) != 0;
 	// X
-	int16_t accelTemp = (int16_t) FAC_IMU_GET_accel_X_mg();	// +-16000mg at the programmed full scale, it fits
+	int16_t accelTemp = imuWorking ? (int16_t) FAC_IMU_GET_accel_X_mg() : 0;	// +-16000mg at the programmed full scale, it fits
 	FAC_settings_uint16_to_bytes(accelTemp, accel);
 	telemetryPacket[21] = accel[0];
 	telemetryPacket[22] = accel[1];
 	// Y
-	accelTemp = (int16_t) FAC_IMU_GET_accel_Y_mg();
+	accelTemp = imuWorking ? (int16_t) FAC_IMU_GET_accel_Y_mg() : 0;
 	FAC_settings_uint16_to_bytes(accelTemp, accel);
 	telemetryPacket[23] = accel[0];
 	telemetryPacket[24] = accel[1];
 	// Z
-	accelTemp = (int16_t) FAC_IMU_GET_accel_Z_mg();
+	accelTemp = imuWorking ? (int16_t) FAC_IMU_GET_accel_Z_mg() : 0;
 	FAC_settings_uint16_to_bytes(accelTemp, accel);
 	telemetryPacket[25] = accel[0];
 	telemetryPacket[26] = accel[1];
@@ -306,6 +329,50 @@ static void FAC_settings_USB_SEND_telemetry(void) {
 	FAC_settings_uint16_to_bytes(accelTemp, accel);
 	telemetryPacket[25] = accel[0];
 	telemetryPacket[26] = accel[1];
+#endif
+
+	/* gyroscope */
+	uint8_t gyro[2];
+#ifndef IM_TESTING_FAC_TOOL
+	// 0.1dps, one division per axis: the full scale is 32768 * 70mdps = +-2293dps, +-22937 here, it fits
+	// X
+	int16_t gyroTemp = imuWorking ? (int16_t) (FAC_IMU_GET_gyro_X_mdps() / 100) : 0;
+	FAC_settings_uint16_to_bytes(gyroTemp, gyro);
+	telemetryPacket[27] = gyro[0];
+	telemetryPacket[28] = gyro[1];
+	// Y
+	gyroTemp = imuWorking ? (int16_t) (FAC_IMU_GET_gyro_Y_mdps() / 100) : 0;
+	FAC_settings_uint16_to_bytes(gyroTemp, gyro);
+	telemetryPacket[29] = gyro[0];
+	telemetryPacket[30] = gyro[1];
+	// Z
+	gyroTemp = imuWorking ? (int16_t) (FAC_IMU_GET_gyro_Z_mdps() / 100) : 0;
+	FAC_settings_uint16_to_bytes(gyroTemp, gyro);
+	telemetryPacket[31] = gyro[0];
+	telemetryPacket[32] = gyro[1];
+#else
+	// ramps on [-500, 499] 0.1dps, so the tool sees both signs
+	static uint16_t gyrox = 0;
+	static uint16_t gyroy = 330;
+	static uint16_t gyroz = 660;
+	// X
+	gyrox = (gyrox + 10) % 1000;
+	int16_t gyroTemp = (int16_t) gyrox - 500;
+	FAC_settings_uint16_to_bytes(gyroTemp, gyro);
+	telemetryPacket[27] = gyro[0];
+	telemetryPacket[28] = gyro[1];
+	// Y
+	gyroy = (gyroy + 10) % 1000;
+	gyroTemp = (int16_t) gyroy - 500;
+	FAC_settings_uint16_to_bytes(gyroTemp, gyro);
+	telemetryPacket[29] = gyro[0];
+	telemetryPacket[30] = gyro[1];
+	// Z
+	gyroz = (gyroz + 10) % 1000;
+	gyroTemp = (int16_t) gyroz - 500;
+	FAC_settings_uint16_to_bytes(gyroTemp, gyro);
+	telemetryPacket[31] = gyro[0];
+	telemetryPacket[32] = gyro[1];
 #endif
 
 	/* TRANMIT POCKET */

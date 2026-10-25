@@ -457,6 +457,16 @@ uint8_t FAC_IMU_GET_is_calibrated(void) {
 }
 
 /*
+ * @brief	TRUE once the whole init chain went through, so the sensor answered WHO_AM_I and took
+ * 			its configuration
+ * @note	It says nothing about the last read: a sensor that dropped off the bus afterwards stays
+ * 			initialized, and only FAC_IMU_GET_status tells that case apart
+ */
+uint8_t FAC_IMU_GET_is_initialized(void) {
+	return gyro.is_initialized;
+}
+
+/*
  * @brief		Acceleration of one axis of the CALIBRATED frame, in raw counts
  * @note		Call FAC_IMU_update first, exactly as for the body accessors: this reprojects what
  * 				that read brought home, it does not touch the bus itself

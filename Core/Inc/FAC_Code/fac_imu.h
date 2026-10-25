@@ -51,6 +51,7 @@ typedef struct Gyro {
 } Gyro;
 
 HAL_StatusTypeDef FAC_IMU_GET_status(void);
+uint8_t FAC_IMU_GET_is_initialized(void);
 void FAC_IMU_update(void);
 int16_t FAC_IMU_GET_accel_raw(uint8_t axis);
 int16_t FAC_IMU_GET_gyro_raw(uint8_t axis);
