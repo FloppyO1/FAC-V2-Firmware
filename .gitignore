@@ -5,8 +5,9 @@
 #   .project .cproject .mxproject  - IDE project definition
 #   FAC_Firmware_V2.ioc            - CubeMX configuration (source of truth)
 #   STM32F072CBTX_FLASH.ld         - linker script
-#   *.launch                       - debug/run configurations
 #   .settings/                     - IDE per project preferences
+#
+# NOT tracked: debug/run configurations (*.launch, *.cfg), see the bottom.
 # ---------------------------------------------------------------------------
 
 # --- Build output ----------------------------------------------------------
@@ -65,5 +66,11 @@ $RECYCLE.BIN/
 # --- Misc ------------------------------------------------------------------
 *.log
 *.stackdump
-FAC_Firmware_V2 Debug.launch
-FAC_Firmware_V2 Debug.cfg
+
+# --- Personal debug configurations -----------------------------------------
+# A .launch pins the serial number of one specific ST-LINK and embeds absolute
+# paths of one machine, so it is useless (and fails to find the probe) on any
+# other setup. Each developer keeps their own; CubeIDE recreates a default one
+# from Run > Debug Configurations.
+*.launch
+*.cfg

@@ -16,7 +16,7 @@ This directory is a **git submodule** of the `Floppy-Ant-Controller` repo (paren
 
 STM32CubeIDE (Eclipse CDT) project — `.project`, `.cproject`, `FAC_Firmware_V2.ioc`. Two configurations exist: `Debug` and `Release`.
 
-- **Normal workflow is the IDE**: build with STM32CubeIDE, flash/debug over ST-LINK using `FAC_Firmware_V2 Debug.launch`.
+- **Normal workflow is the IDE**: build with STM32CubeIDE, flash/debug over ST-LINK using `FAC_Firmware_V2 Debug.launch`. **`*.launch` / `*.cfg` are git-ignored**: they pin one ST-LINK serial number and embed absolute paths, so each machine keeps its own (a mismatched serial makes CubeIDE report "no ST-LINK found" while CubeProgrammer works fine).
 - **CLI build**: `make -C Debug all` (needs `arm-none-eabi-gcc` from *GNU Tools for STM32 13.3.rel1* and `make` on PATH — neither is on PATH by default).
 - **Compile-checking a single file without the IDE**: the toolchain ships inside STM32CubeIDE, at `<CubeIDE>/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.*/tools/bin`. Prepending that to `PATH` lets you run `arm-none-eabi-gcc -c` on one `.c` with the flags below plus `-ICore/Inc -IDrivers/... -IUSB_DEVICE/... -IMiddlewares/...`, which needs **none** of the generated `Debug/` makefiles. Worth doing on every file you touch before handing work over — it catches typos and `-Wall` warnings. It is not a link, so it proves nothing about the final binary; full builds still go through the IDE.
 - `Debug/makefile` and `Debug/**/subdir.mk` are **auto-generated and contain absolute paths** (`D:\GITHUB\Floppy-Ant-Controller\...`). Never hand-edit them; adding a new `.c` file requires regenerating them from the IDE (refresh/rebuild the project), otherwise the file silently isn't compiled.
