@@ -6,6 +6,8 @@
 #   FAC_Firmware_V2.ioc            - CubeMX configuration (source of truth)
 #   STM32F072CBTX_FLASH.ld         - linker script
 #   .settings/                     - IDE per project preferences
+#   CMakeLists.txt CMakePresets.json cmake/  - CMake build (VS Code)
+#   .vscode/launch.json .vscode/extensions.json
 #
 # NOT tracked: debug/run configurations (*.launch, *.cfg), see the bottom.
 # ---------------------------------------------------------------------------
@@ -16,6 +18,8 @@
 # valid on the machine that produced them.
 /Debug/
 /Release/
+# CMake build tree (VS Code / STM32Cube extension), one folder per preset
+/build/
 
 # Object files and build products anywhere else (out of tree or manual builds)
 *.o
@@ -47,7 +51,10 @@ RemoteSystemsTempFiles/
 .mxproject.bak
 
 # --- Editors / IDEs --------------------------------------------------------
-.vscode/
+# VS Code: only the shared, machine independent files are tracked
+.vscode/*
+!.vscode/launch.json
+!.vscode/extensions.json
 .idea/
 *.code-workspace
 *.swp

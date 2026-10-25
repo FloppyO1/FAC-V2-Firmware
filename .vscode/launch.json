@@ -1,0 +1,22 @@
+{
+    // Debug over ST-LINK with the STM32Cube for VS Code extension.
+    // No probe serial number on purpose: the first ST-LINK found is used, so this file works on
+    // any machine. Add "serverSerialNumber" locally if more than one probe is connected.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "stlinkgdbtarget",
+            "request": "launch",
+            "name": "FAC V2: build, flash and debug (ST-LINK)",
+            "origin": "snippet",
+            "cwd": "${workspaceFolder}",
+            "preBuild": "${command:st-stm32-ide-debug-launch.build}",
+            "runEntry": "main",
+            "imagesAndSymbols": [
+                {
+                    "imageFileName": "${command:st-stm32-ide-debug-launch.get-projects-binary-from-context1}"
+                }
+            ]
+        }
+    ]
+}
