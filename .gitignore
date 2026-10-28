@@ -5,8 +5,11 @@
 #   .project .cproject .mxproject  - IDE project definition
 #   FAC_Firmware_V2.ioc            - CubeMX configuration (source of truth)
 #   STM32F072CBTX_FLASH.ld         - linker script
-#   *.launch                       - debug/run configurations
 #   .settings/                     - IDE per project preferences
+#   CMakeLists.txt CMakePresets.json cmake/  - CMake build (VS Code)
+#   .vscode/launch.json .vscode/extensions.json
+#
+# NOT tracked: debug/run configurations (*.launch, *.cfg), see the bottom.
 # ---------------------------------------------------------------------------
 
 # --- Build output ----------------------------------------------------------
@@ -15,6 +18,8 @@
 # valid on the machine that produced them.
 /Debug/
 /Release/
+# CMake build tree (VS Code / STM32Cube extension), one folder per preset
+/build/
 
 # Object files and build products anywhere else (out of tree or manual builds)
 *.o
@@ -46,7 +51,10 @@ RemoteSystemsTempFiles/
 .mxproject.bak
 
 # --- Editors / IDEs --------------------------------------------------------
-.vscode/
+# VS Code: only the shared, machine independent files are tracked
+.vscode/*
+!.vscode/launch.json
+!.vscode/extensions.json
 .idea/
 *.code-workspace
 *.swp
@@ -65,3 +73,11 @@ $RECYCLE.BIN/
 # --- Misc ------------------------------------------------------------------
 *.log
 *.stackdump
+
+# --- Personal debug configurations -----------------------------------------
+# A .launch pins the serial number of one specific ST-LINK and embeds absolute
+# paths of one machine, so it is useless (and fails to find the probe) on any
+# other setup. Each developer keeps their own; CubeIDE recreates a default one
+# from Run > Debug Configurations.
+*.launch
+*.cfg

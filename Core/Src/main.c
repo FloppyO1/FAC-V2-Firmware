@@ -30,6 +30,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "FAC_Code/fac_boot.h"
 #include "FAC_Code/fac_app.h"
 
 /* FOR DEBUG AND TESTS */
@@ -91,6 +92,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+	FAC_boot_relocate_vectors();	// before HAL_Init: interrupts need the vectors in SRAM
 
   /* USER CODE END 1 */
 
@@ -134,6 +136,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+		FAC_boot_confirm();	// tells the bootloader this boot went fine
 	}
   /* USER CODE END 3 */
 }

@@ -47,6 +47,7 @@ typedef struct Mixes {
 enum FAC_MIXES_ID {			// 3) of HOW TO MAKE A MIX
 	FAC_MIX_NONE,			// this mix disable all the devices
 	FAC_MIX_SIMPLE_TANK,
+	FAC_MIX_SIMPLE_TANK_KEEP_DIRECTION,
 
 	FAC_MIX_LAST,
 };

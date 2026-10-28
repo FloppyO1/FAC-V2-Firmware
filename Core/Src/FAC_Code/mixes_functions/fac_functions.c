@@ -147,7 +147,7 @@ void FAC_functions_update(uint8_t sFunctionID) {
  */
 void FAC_functions_init(void) {
 	for (int i = 0; i < SPECIAL_FUNCITONS_NUMBER; i++) {	// set all input channels to zero (no input selected)
-		FAC_functions_SET_input_channels(i, FAC_settings_GET_value(FAC_SETTINGS_CODE_SPECIAL_FUNCTION1_INPUT_CHANNEL + i));
+		FAC_functions_SET_input_channels(i, FAC_settings_GET_value(FAC_SETTINGS_CODE_SPECIAL_FUNCTION0_INPUT_CHANNEL + i));
 		FAC_functions_SET_input(i, FAC_VALUE_ZERO);
 		FAC_functions_SET_output(i, FAC_VALUE_ZERO);
 	}

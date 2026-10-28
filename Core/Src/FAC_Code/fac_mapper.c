@@ -76,6 +76,9 @@ static void FAC_mapper_apply_to_DCmotor(uint8_t motorNumber, uint8_t linkValue) 
 	uint8_t dir = (outputLinkedValue < 0) ? BACKWARD : FORWARD;
 	uint16_t speed = (uint16_t) ((FAC_math_abs(outputLinkedValue)
 			* MOTOR_SPEED_RESOLUTION) / FAC_VALUE_MAX);	// exact, the two resolutions are equal
+	// deliberately NOT scaled to MOTOR_SPEED_RESOLUTION - 1: that would truncate the whole scale
+	// (500 -> 499) to recover a full-scale ceiling. The ceiling lives in FAC_motor_SET_speed below,
+	// which now admits MOTOR_SPEED_RESOLUTION, so full stick is a true 100% duty
 
 	/* APPLY TO THE MOTOR */
 	FAC_motor_set_speed_direction(motorNumber, dir, speed);
@@ -98,9 +101,17 @@ static void FAC_mapper_apply_to_servo(uint8_t servoNumber, uint8_t linkValue) {
 	}
 
 	/* CALCULATE SERVO POSITION/ESC VELOCITY */
-	// the full negative travel is position 0 and the full positive one is the last position
+	// the full negative travel is position 0 and the full positive one is the last position.
+	// MAX_SERVO_VALUE, not SERVO_POSITION_RESOLUTION: it is the same number as the divisor of the
+	// pulse formula at fac_servo.c:98, and tying the two together is what makes the map correct.
+	// Two consequences:
+	//   - the map is now UNIFORM over the travel. Targeting the resolution instead flattened the
+	//     top three values (998, 999, 1000) onto position 999, because FAC_servo_SET_position
+	//     clamps there
+	//   - the centre v = 0 lands on position 499 instead of 500, half a step below mechanical
+	//     centre (0,05% of travel). Unavoidable: a 1000-step device has no exact middle
 	uint16_t position = (uint16_t) FAC_math_to_range(outputLinkedValue, 0,
-	SERVO_POSITION_RESOLUTION);
+	MAX_SERVO_VALUE);
 
 	/* APPLY TO THE MOTOR */
 	FAC_servo_set_position(servoNumber, position);

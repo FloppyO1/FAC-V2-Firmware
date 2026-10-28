@@ -19,6 +19,8 @@
  *		4 divisions : sin, cos
  *		6 divisions : atan2
  *	A mix built out of add/sub/clamp costs no division at all, which covers most of them.
+ *	sqrt is the one exception to reading this list as a cost: it pays no division, but it always
+ *	walks 16 shift-and-subtract steps, so budget it like a couple of divisions rather than as free.
  *
  *	THE VALUE SCALE
  *	A normalized value is an int32_t in [-1000, +1000], where 1000 means "full scale".
@@ -295,6 +297,42 @@ static inline int32_t FAC_math_clamp_to(int32_t v, int32_t min, int32_t max) {
 	return v;
 }
 
+/*
+ * @brief	Integer square root
+ * @note	EXACT, not an approximation: it returns the largest r with r*r <= v, so it is the real
+ * 			square root truncated toward zero. The trigonometry above is approximated, this is not
+ * @note	It costs no division, which is why it is written this way instead of with a Newton
+ * 			iteration: the binary restoring method only shifts, compares and subtracts. It is not
+ * 			free though, it always walks 16 steps, so budget it like a couple of divisions
+ * @note	ON A SCALED VALUE the scale comes out halved, because sqrt(x*scale) is sqrt(x)*sqrt(scale).
+ * 			To get the result back on the scale the input was in, multiply the input by that scale
+ * 			once more before calling: FAC_math_sqrt(x * scale) is x's root, still on scale
+ * @IMPORTANT	v must fit in int32_t AFTER any such pre-multiplication, so keep it under 2*10^9.
+ * 			That is the real limit of the idiom above, and where a caller has to pick its units
+ * @retval	the square root of v truncated toward zero, 0 for a negative v
+ */
+static inline int32_t FAC_math_sqrt(int32_t v) {
+	if (v <= 0)
+		return 0;
+	uint32_t rest = (uint32_t) v;
+	uint32_t root = 0;
+	uint32_t bit = 1UL << 30;	// the highest power of four a positive int32_t can hold
+
+	while (bit > rest)
+		bit >>= 2;	// start from the first power of four that is not already too big
+
+	while (bit != 0) {
+		if (rest >= root + bit) {
+			rest -= root + bit;
+			root = (root >> 1) + bit;
+		} else {
+			root >>= 1;
+		}
+		bit >>= 2;
+	}
+	return (int32_t) root;
+}
+
 /* ------------------------------------------------------------------------------------------ */
 /* 3) ANGLES AND TRIGONOMETRY                                                                 */
 /* ------------------------------------------------------------------------------------------ */
@@ -302,8 +340,8 @@ static inline int32_t FAC_math_clamp_to(int32_t v, int32_t min, int32_t max) {
 // and every division is by a constant. Accuracy measured against the real functions over the
 // whole turn: sin and cos stay within 2 units out of 1000 (0.2% of full scale) and are exact at
 // the four quadrant points, atan2 stays within 2 angle units (0.18 degrees).
-// For scale: a robot spinning at 20 turns per second covers about 18 degrees between two
-// iterations of a 400Hz loop, so the loop rate limits the heading a hundred times more than
+// For scale: a robot spinning at 20 turns per second covers about 7 degrees between two
+// iterations of the 1kHz main loop, so the loop rate limits the heading forty times more than
 // these approximations do.
 /*
  * @brief	Bring any angle back inside one turn

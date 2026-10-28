@@ -79,13 +79,15 @@ The code is organised in layers, each in its own module under `Core/Src/FAC_Code
 
 ## 3. Boot sequence
 
+From 2.1.0 the firmware runs **under the USB CDC bootloader** (separate repository `FAC-V2-Bootloader`): the bootloader owns the first 16 KB of flash, checks the application at every reset and jumps to it at `0x08004000`. The very first thing `main()` does is `FAC_boot_relocate_vectors()`: the Cortex-M0 has no VTOR, so the vector table is copied to the start of SRAM and SRAM is remapped at address 0 before `HAL_Init()` enables any interrupt. After one second of main loop `FAC_boot_confirm()` tells the bootloader the boot went fine (3 unconfirmed boots in a row keep the board in the bootloader). See [§9](#9-usb-protocol-reference) for command 8.
+
 `main()` (CubeMX-generated) initialises the clocks and peripherals, then hands over to `FAC_app_init()`, which performs the following in a fixed order — the order matters, because later steps depend on settings loaded by earlier ones:
 
 1. **~300 ms settling delay** (watchdog refreshed around it).
 2. `FAC_adc_Init()` — ADC calibration, start the DMA scan, then measure VREFINT to derive the true VDDA. This is what makes battery readings accurate regardless of supply variation.
 3. `FAC_battery_init()` — reset the battery struct, set the hardware divider ratio (7692, i.e. 7.692:1).
 4. `FAC_settings_init(FIRMWARE_VERSION_TAG)` — the key step: compares a marker byte in EEPROM against the firmware version tag. If they differ (first boot ever, or a firmware version bump), the **default** settings are written to EEPROM and the LED blinks **10 times fast**; otherwise the stored settings are loaded and the LED blinks **3 times**. Watching the boot blink tells you which happened.
-5. **~1000 ms delay**, then IMU init (`FAC_IMU_init`, accelerometer, gyroscope). On failure the LED blinks **20 times** and the firmware continues without IMU data; on success the gyro offsets are computed.
+5. **~1000 ms delay**, then IMU init (`FAC_IMU_init`, accelerometer, gyroscope) — **identification and configuration only, no calibration**. On failure the LED blinks **20 times** and the firmware continues without IMU data. The gyro offsets and the orientation reference are measured at **arming** instead ([§4](#4-main-loop-and-operating-states)): at power-up the robot may still be in the operator's hand, and offsets measured on a moving body stay biased for the whole run.
 6. `FAC_app_init_all_modules()` — initialises every setting-dependent module (battery calibration, motors, receiver, servos, mixes, special functions). **This same function is re-run when the FAC Tool sends the *apply settings* command**, which is how configuration changes take effect without a reboot — see [§6.4](#64-applying-settings-without-disturbing-a-live-robot) for what that re-run is and is not allowed to touch.
 7. State is forced to `FAC_STATE_DISARMED`, the battery type (cell count) is detected once, and a startup jingle plays.
 
@@ -115,10 +117,23 @@ Each iteration: handle a pending USB command (if any), refresh the watchdog, the
                                              └──────────┘   except a power cycle)
 ```
 
-**`FAC_STATE_DISARMED`** — every motor is set to speed 0 and every servo PWM is disabled, on every iteration. The board beeps periodically through the motors and blinks the LED at 1 Hz. Arming requires **two** conditions:
+**`FAC_STATE_DISARMED`** — every motor is set to speed 0 and every servo PWM is disabled, on every iteration. The board beeps periodically through the motors and blinks the LED at 1 Hz.
+
+Arming separates the **request** from the **decision**. The request needs two conditions:
 
 - `FAC_std_receiver_GET_is_connected()` is true. This becomes true once *any* channel reads non-zero, on the assumption that a receiver not bound to a transmitter emits nothing. This gate was added deliberately so the board cannot arm without a live RC link.
-- Either `ARMING_CHANNEL` is `0` (feature disabled → arm immediately), or that channel exceeds `ARMING_THRESHOLD` (80 % of full scale).
+- Either `ARMING_CHANNEL` is `0` (feature disabled → always requested), or that channel exceeds `ARMING_THRESHOLD` (80 % of full scale).
+
+The decision then goes through the **IMU calibration gate**, `FAC_app_arming_calibration_passed()`. Arming is the right moment to calibrate: the robot is presumed placed in the arena and standing still, which is exactly what boot time is not. The gate runs **one** `FAC_IMU_calibrate()` attempt per loop pass — never a retry loop, because each attempt blocks ~400 ms and USB, receiver capture and the state machine have to keep running between two of them — with `FAC_ARMING_CALIBRATION_RETRY_PERIOD` (200 ms) of idle between attempts so a robot being carried does not hammer the I²C bus.
+
+| Situation | Behaviour |
+|---|---|
+| `FAC_IMU_GET_status() == HAL_ERROR` | Gate skipped entirely, arms immediately. **The IMU is non-fatal by design** and a board without one must still fight. |
+| Calibration passes | Arms, one short high beep (`FAC_ARMING_CALIBRATION_OK_TONE_*`). |
+| Keeps failing, `ARMING_CHANNEL != 0` | Arms anyway after `FAC_ARMING_CALIBRATION_ATTEMPTS` (5) with the **previous** offsets, plus the failure signal. The pilot asked explicitly; a combat robot that refuses to arm is worse than one with an imprecise offset. |
+| Keeps failing, `ARMING_CHANNEL == 0` | Stillness becomes a **real gate** — without a channel the board would otherwise arm the instant the receiver sees the transmitter, possibly still in the operator's hand. Stays DISARMED and keeps retrying until `FAC_ARMING_CALIBRATION_STILLNESS_TIMEOUT` (10 s), then arms anyway with the failure signal. |
+
+The failure signal is `FAC_ARMING_CALIBRATION_FAIL_BLINKS` fast LED blinks plus **two** long low beeps — deliberately unmistakable against the single short high beep of a success. The LED is held solid ON for the duration of each attempt; the DISARMED blink timer resumes on its own afterwards, which makes a repeatedly failing calibration visible as an irregular blink. The attempt counter and the timeout origin are reset whenever the request drops and once the board actually arms, so a disarm/re-arm cycle starts clean.
 
 **`FAC_STATE_NORMAL`** — the working state. Calls `FAC_mapper_apply_to_devices()` (the whole processing chain), re-checks the arming channel, evaluates low battery and cut-off, and holds the LED solid (or blinks it at 2 Hz when the battery is low).
 
@@ -145,8 +160,9 @@ This is the heart of the firmware and the part worth understanding first.
         │  FAC_std_receiver_new_channel_value()
         ▼
 ┌───────────────────────────┐
-│ fac_std_receiver          │   channels[8], integers 0 … 999
-│  · deadzone + relinearise │   (RECEIVER_CHANNEL_RESOLUTION = 1000)
+│ fac_std_receiver          │   channels[8], integers 0 … 1000
+│  · deadzone + relinearise │   (RECEIVER_CHANNEL_RESOLUTION = 1000,
+│                           │    1001 values, exact centre 500)
 └───────────────────────────┘
         │  FAC_std_receiver_GET_channel(n)   1-based
         ▼
@@ -256,6 +272,11 @@ A marker byte at address 255 holds `FIRMWARE_VERSION_TAG`, a hash of the version
 ```
 
 When the tag in EEPROM does not match the running firmware, the settings are considered incompatible and **all defaults are rewritten**. Practical consequence: **bumping the firmware version resets the user's configuration.** That is intended when the settings layout changes, but it happens on *any* version bump.
+
+The version is *also* stored as an ordinary setting, `FAC_SETTINGS_CODE_FIRMWARE_VERSION`, packed as `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_VALUE` in `config.h`, so `2.1.0` is `20100`) — that is what the FAC Tool reads back to display the version. Two things keep it truthful, and both are load-bearing:
+
+- its **default in the `settings[]` table is `FIRMWARE_VERSION_VALUE` itself**, not a hardcoded literal, so the factory reset above writes the version of the firmware that is actually running;
+- `FAC_settings_STORE_new_firmware_version()` runs at the **end** of `FAC_settings_init()`, after the load/defaults branch, and updates the **settings array as well as** the EEPROM. Writing the EEPROM alone would leave the array holding whatever the previous firmware stored, and the array is what `FAC_settings_USB_SEND_setting_value()` answers with.
 
 ### 6.3 Runtime flow
 
@@ -388,7 +409,7 @@ uint8_t  FAC_std_receiver_GET_is_connected(void);
 | Function | Description |
 |---|---|
 | `FAC_std_reciever_init` | Clears all channels and initialises the backend for `type` (`RECEIVER_TYPE_PWM` / `_PPM` / `_NRF24` / `_ELRS`). The last two are placeholders. *(Note the misspelling in the public name.)* **Returns immediately, without touching anything, if `type` is unchanged and the receiver was already initialised** — re-running the clear on a live receiver would drop its channels to `0`, which decodes as full negative travel, not "no signal" (issue #19). |
-| `FAC_std_receiver_GET_channel` | Value of channel `chNumber` (**1-based**), `0 … RECEIVER_CHANNEL_RESOLUTION-1`. Triggers a recalculation from the active backend. Channels beyond the backend's capability return the last stored value; a `chNumber` outside `1 … RECEIVER_CHANNELS_NUMBER` returns `0` without touching any backend. |
+| `FAC_std_receiver_GET_channel` | Value of channel `chNumber` (**1-based**), `0 … RECEIVER_CHANNEL_RESOLUTION` — 1001 values, exact centre `500`. Triggers a recalculation from the active backend. Channels beyond the backend's capability return the last stored value; a `chNumber` outside `1 … RECEIVER_CHANNELS_NUMBER` returns `0` without touching any backend. |
 | `FAC_std_receiver_new_channel_value` | Backend → abstraction entry point: applies the deadzone, clamps, and stores. |
 | `FAC_std_receiver_GET_is_connected` | `TRUE` once any channel has read non-zero. Polls one channel per call, round-robin over `1 … RECEIVER_CHANNELS_NUMBER`. Used as the arming gate. |
 
@@ -445,7 +466,7 @@ fac_value_t FAC_mixes_GET_output(uint8_t outputNumber);         // 0-based
 |---|---|
 | `FAC_mixes_init` | Loads the active mix ID and per-input channel/reversal settings; zeroes inputs and outputs. Requires settings to be loaded first. |
 | `FAC_mix_update` | Dispatches to the active mix's update function. Add a `case` here for each new mix. |
-| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver, normalising `0…999` → `-1000…+1000` with `FAC_math_from_range` and applying per-input reversal from the values cached by `init()`. Disabled inputs (channel `0`) become `FAC_VALUE_ZERO`. Called by the mix boilerplate. |
+| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver, normalising `0…1000` → `-1000…+1000` with `FAC_math_from_range` and applying per-input reversal. The identity `input = 2×channel - 1000` holds exactly, so full travel is reachable at both ends and the stick centre `500` gives exactly `0` from the values cached by `init()`. Disabled inputs (channel `0`) become `FAC_VALUE_ZERO`. Called by the mix boilerplate. |
 | `FAC_mixes_update_mix_outputs` | Copies a mix's local output array into the shared struct. **Must be called at the end of every mix update.** |
 | `FAC_mixes_GET_input` / `_GET_output` | Read the shared normalised arrays. Both bounds-check the index and return `FAC_VALUE_ZERO` when it is out of range — the mapper can reach them with an invalid link value (issue #17). |
 
@@ -534,7 +555,11 @@ uint8_t  FAC_servo_GET_is_reversed(uint8_t servoNumber);
 
 TIM3 is prescaled to **1000 ticks per millisecond**, so a pulse width in microseconds maps directly onto the CCR value at any frame rate; the period is recomputed as `(1000 × SERVO_RESOLUTION) / frequency`.
 
-Position → pulse width is `CCR = min_us + (span × position) / MAX_SERVO_VALUE`, where `span = max_us - min_us`. The multiplication is done in **32 bit on purpose**: the widest configurable span (2800 µs) times the maximum position (999) is ≈ 2.8 M and does not fit in 16 bit. Since `position` is clamped to `MAX_SERVO_VALUE`, full deflection reaches exactly the configured `max_us`. Note that `MAX_SERVO_VALUE` is parenthesised in the header precisely because it is used as a divisor here.
+Position → pulse width is `CCR = min_us + (span × position) / MAX_SERVO_VALUE`, where `span = max_us - min_us`. The multiplication is done in **32 bit on purpose**: the widest configurable span (2800 µs) times the maximum position (999) is ≈ 2.8 M and does not fit in 16 bit. Note that `MAX_SERVO_VALUE` is parenthesised in the header precisely because it is used as a divisor here.
+
+The mapper feeds this with `FAC_math_to_range(value, 0, MAX_SERVO_VALUE)` (`fac_mapper.c`), i.e. `position = (value + 1000) / 2 × 999 / 1000` over the normalised `-1000 … +1000`. Targeting `MAX_SERVO_VALUE` rather than `SERVO_POSITION_RESOLUTION` is what makes the map **uniform** over the travel: the earlier expression put `998`, `999` and `1000` all on position `999`, a three-value flat spot at the top that the clamp below was hiding. Full deflection therefore reaches exactly the configured `max_us`, and the centre `value = 0` lands on position `499` — half a step below mechanical centre, 0,05 % of travel, unavoidable for a 1000-step device with no exact middle.
+
+The `FAC_servo_SET_position` clamp to `MAX_SERVO_VALUE` is **load-bearing, not defensive**: it is the divisor of the formula above, so a position of `1000` would produce a pulse beyond `max_us`.
 
 
 ### 8.11 `fac_adc` — analog front end
@@ -582,19 +607,102 @@ Conversion: `mV = (VDDA_µV / adcResolution) × rawSample × dividerRatio / 1e6`
 HAL_StatusTypeDef FAC_IMU_init(void);
 void FAC_IMU_init_accelerometer(void);
 void FAC_IMU_init_gyroscope(void);
-void FAC_IMU_compute_gyro_offset(void);
 HAL_StatusTypeDef FAC_IMU_GET_status(void);
-float FAC_IMU_GET_accel_X(void);  // g
-float FAC_IMU_GET_accel_Y(void);
-float FAC_IMU_GET_accel_Z(void);
-float FAC_IMU_GET_gyro_X(void);   // deg/s
-float FAC_IMU_GET_gyro_Y(void);
-float FAC_IMU_GET_gyro_Z(void);
+uint8_t FAC_IMU_GET_is_initialized(void);      // TRUE once the init chain went through; says nothing about the last read
+void    FAC_IMU_update(void);                  // the only call that touches the bus
+int16_t FAC_IMU_GET_accel_raw(uint8_t axis);   // raw counts, axis is X_AXIS / Y_AXIS / Z_AXIS
+int16_t FAC_IMU_GET_gyro_raw (uint8_t axis);
+int32_t FAC_IMU_GET_accel_X_mg(void);          // milli g, 1 g = 1000
+int32_t FAC_IMU_GET_accel_Y_mg(void);
+int32_t FAC_IMU_GET_accel_Z_mg(void);
+int32_t FAC_IMU_GET_gyro_X_mdps(void);         // milli deg/s, 1 dps = 1000
+int32_t FAC_IMU_GET_gyro_Y_mdps(void);
+int32_t FAC_IMU_GET_gyro_Z_mdps(void);
+
+/* calibration — runs at arming, not at boot */
+uint8_t FAC_IMU_calibrate(void);               // blocking ~400 ms, TRUE if it passed validation
+uint8_t FAC_IMU_GET_is_calibrated(void);
+
+/* levelled data, world frame: X forward, Y left, Z up */
+int32_t FAC_IMU_GET_accel_level_raw(uint8_t axis);
+int32_t FAC_IMU_GET_gyro_level_raw (uint8_t axis);
+
+/* attitude */
+int16_t FAC_IMU_GET_up(uint8_t axis);          // the calibrated up vector in body coords, scale 1000
+int32_t FAC_IMU_GET_tilt_angle(void);          // binary angle, 0 = as armed, 2048 = flipped
+uint8_t FAC_IMU_GET_is_upside_down(void);
+int32_t FAC_IMU_GET_yaw_rate_mdps(void);       // true rate about the calibrated vertical
+
+/* heading — OPT-IN: integrated only by these calls */
+int32_t FAC_IMU_GET_heading(void);             // binary angle
+void    FAC_IMU_RESET_heading(void);
 ```
 
 > **Always check `FAC_IMU_GET_status() != HAL_ERROR` before using IMU data.** An init failure is non-fatal — the firmware keeps running without the IMU — so consumers must handle it.
 
-Each `GET_accel_*` / `GET_gyro_*` call performs a **blocking I²C read** of that axis; they are not cached. Accelerometer range is ±16 g at 416 Hz; gyroscope ±2000 dps at 416 Hz.
+**The read model is `update` then `GET`.** `FAC_IMU_update()` refreshes all six axes with a **single I²C transaction** and is the only function on the bus; every accessor afterwards is a plain field read and costs nothing. Three guards make it cheap to call unconditionally:
+
+- it returns immediately until the whole init chain has completed, so a missing sensor is never addressed;
+- a second call **inside the same millisecond** returns at once — no loss of freshness, since at the 416 Hz output data rate a new sample only lands every 2.4 ms. This is what lets any number of consumers in one loop pass share one transaction;
+- after a failed read the sensor is marked `HAL_ERROR` and retried only **once a second**, so a sensor that dropped off the bus cannot spend a blocking timeout on every loop pass.
+
+A failed read leaves the previous values in place, so `FAC_IMU_GET_status()` is what distinguishes fresh data from stale.
+
+**Units.** Accelerometer ±16 g at 416 Hz, gyroscope ±2000 dps at 416 Hz. `_mg` costs one division per call; `_mdps` costs **none** — the sensitivity is a whole 70 mdps per count, which is why milli-degrees and not degrees. A mix is usually better off with `_raw` plus `FAC_math_from_range`, which normalises without paying for an intermediate unit. There are **no floats left in this module**.
+
+> Gyro full scale is ±2000 dps ≈ **333 RPM**: fast enough for stabilisation or self-righting, but a melty brain saturates it long before its working speed. The usual way round is centripetal acceleration (`ω = √(a/r)`), which is bounded in turn by the ±16 g accelerometer and by how far from the spin axis the IMU sits.
+
+#### Calibration and the level frame
+
+`FAC_IMU_calibrate()` is called from the **arming gate** ([§4](#4-main-loop-and-operating-states)), never at boot. It blocks ~400 ms (the watchdog is refreshed inside the driver), runs **one** attempt, and does two things at once from a single `LSM6DS3_measure_still()` window:
+
+1. **Zeroes the gyroscope** — the offsets are the negated per-axis mean.
+2. **Establishes the orientation** — three orthonormal basis vectors expressed in **body** coordinates on the `FAC_IMU_UNIT_SCALE` (1000) scale, right-handed, `X = forward`, `Y = left`, `Z = up`:
+
+```
+up      = normalize(accel_mean)                  /* a MEMS accelerometer at rest reads +1 g on the
+                                                    axis pointing upwards, so the measured vector
+                                                    already points up and is not negated */
+forward = normalize(Xbody - (Xbody · up) · up)   /* body +X projected on the horizontal plane */
+left    = up × forward                           /* check: forward=(1,0,0), up=(0,0,1) -> left=(0,1,0) */
+```
+
+When `|up.x| > IMU_CALIBRATION_VERTICAL_LIMIT` (900, i.e. body +X within ~26° of vertical) the projection collapses and **body +Y** becomes the reference for `forward` instead. That is a real mounting, not a theoretical case: a FAC bolted to a side wall.
+
+> **What a wrong "up" sign would break is not what you would expect.** The sign appears **twice** on the accelerometer path and cancels: a sensor reporting `−s` would also make the calibration store `up = −u`, and the projection then gives `(−u)·(−s) = u·s`. `forward` is invariant too, since its projection term `(X·up)·up` holds `up` twice. So the tilt angle, `is_upside_down` and the levelled accelerometer Y and Z would all still be correct — only `up` and `left` come out negated, which is this same frame turned 180° about `forward`. **The gyroscope is what pays**: an accelerometer convention does not negate it, so there is no second sign to cancel against and `FAC_IMU_GET_yaw_rate_mdps()`, with the heading built on it, runs backwards. It cannot be auto-detected either — a board at rest reading `(0, 0, +1 g)` is indistinguishable from an upside-down one under the opposite convention — so the datasheet decides, not the data.
+
+**`IMU_ACCEL_SIGN`** (`config.h`, `+1` by default) is the escape hatch if a board ever turns out to be populated with a part answering with the opposite sign. It is applied **at the source** — inside `FAC_IMU_GET_accel_raw()`, which every consumer including the telemetry goes through, plus the equivalent step in `FAC_IMU_calibrate()` for the still-measure mean, which comes straight from the driver. Verified over 4950 attitudes: an inverted board with `IMU_ACCEL_SIGN = -1` produces output **identical to the last count** to a standard board with `+1`, on every levelled value, the tilt, the yaw rate and the flip flag.
+
+> ⚠ **Do not "fix" the sign by negating `up` inside `FAC_IMU_BUILD_frame()` instead.** That breaks the pairing described above and leaves a single, uncancelled negation: the levelled Z comes out inverted and `is_upside_down` reads `TRUE` while the robot is the right way up (measured: levelled Z = `−999` for an upright robot). The correction has to sit where the reading enters, not where the frame is built.
+
+**Validation** — the measurement is applied only if every gyro span is below `IMU_CALIBRATION_MAX_GYRO_SPAN` (the robot did not rotate), every accel span is below `IMU_CALIBRATION_MAX_ACCEL_SPAN` (it was not being carried), the accelerometer magnitude lands inside `[IMU_CALIBRATION_ACCEL_MIN, IMU_CALIBRATION_ACCEL_MAX]` ≈ 0.8 g … 1.2 g, and every component is within `IMU_CALIBRATION_ACCEL_LIMIT`. That last one is **not** a taste threshold: three full-scale squares sum to 3.2×10⁹ and overflow `int32_t`, so it is the overflow guard and is checked **before** squaring. All five live in `config.h` and are **starting points to be verified on hardware**.
+
+> **On any failure — a failed read, a failed validation, a degenerate geometry — nothing changes.** The previous offsets are restored and the previous frame is left alone. This is what makes a mid-match re-arm safe: an attempt made while the robot is moving or upside down cannot destroy a good calibration it already has.
+
+**Two physical limits are structural** and the API is shaped around them rather than hiding them:
+
+- **Yaw is unobservable from gravity.** A stationary accelerometer fixes only roll and pitch; rotating about the vertical does not change the reading by one count, and this board has no magnetometer. So there is no absolute heading — `FAC_IMU_GET_heading()` is *integrated* from the yaw rate and **drifts** (order of 0.5–2 °/s with a good calibration), and its origin is "where the front of the board pointed at the last calibration", stable for the whole run but not a compass bearing.
+- **An accelerometer bias cannot be calibrated from a single pose** — a bias and a tilt produce the same reading. Nothing here pretends to. What replaces it, and what was actually needed, is the level frame: it removes the apparent offset caused by a tilted mounting.
+
+**Uncalibrated, the frame is the identity**, so the levelled accessors return the board's own axes — a defined, harmless fallback rather than zeros or garbage. Levelled data is only *meaningful* once `FAC_IMU_GET_is_calibrated()` is true.
+
+| Function | Description |
+|---|---|
+| `FAC_IMU_calibrate` | One attempt. `TRUE` if it passed. Also resets the heading, whose origin belongs to this calibration. Returns `FALSE` immediately if the sensor never came up. |
+| `FAC_IMU_GET_accel_level_raw` / `_gyro_level_raw` | Raw counts projected on the calibrated frame. **`int32_t`, not `int16_t`**: a projection preserves the vector magnitude, which reaches `32767·√3` and does not fit 16 bit. Needs a preceding `FAC_IMU_update()`, exactly like the body accessors. |
+| `FAC_IMU_GET_up` | One component of the measured vertical in body coordinates, scale 1000. `(0, 0, 1000)` is a board mounted flat. |
+| `FAC_IMU_GET_tilt_angle` | Binary angle in `[0, 2048]` between the current specific force and the calibrated vertical: `0` = the attitude it was armed in, `1024` = on its side, `2048` = upside down. An accelerometer angle, so it says nothing during an impact. |
+| `FAC_IMU_GET_is_upside_down` | Tilt past 90°. Implemented as the **sign of the levelled Z**, which is exactly that test at no trigonometric cost. No hysteresis — a mix switching on it must add its own or it chatters on an edge. |
+| `FAC_IMU_GET_yaw_rate_mdps` | The Z component of the levelled gyro × 70. **The concrete win of the whole feature**: the true yaw rate whatever the mounting angle, instead of a gyro Z that is wrong the moment the board is not flat. |
+| `FAC_IMU_GET_heading` / `_RESET_heading` | See below. |
+
+**Laziness is a requirement, not an optimisation.** Nothing here costs anything to a robot whose mix does not use the IMU:
+
+- `FAC_IMU_update()` is **unchanged** — one burst read and three guards. It projects nothing.
+- The projections happen **inside the accessors** and are cached against `last_update_tick`, so the nine multiplies and three divisions are paid at most once per sensor read however many accessors ask. Accel and gyro have **separate** caches, so a mix wanting only the yaw rate does not pay for the accelerometer.
+- A successful calibration invalidates both caches, since whatever was in them was projected on the old frame.
+
+**The heading integrator lives inside `FAC_IMU_GET_heading()`**, not in the loop. Each call integrates the current yaw rate over the time since the previous call and returns a binary angle; a mix calling it every pass gets a correct integral, a firmware where nobody calls it pays exactly zero. The accumulator is in **micro-degrees** because `mdps × ms` lands there exactly, with no scaling and no division, and is kept inside `[0, 360000000)` by conditional add/subtract instead of a modulo (a library call on a core with no divider). Three cases **resynchronise the timestamp instead of integrating**, because one rate sample says nothing about the interval it would be multiplied by: the first call, any call while the status is `HAL_ERROR`, and a gap longer than `FAC_IMU_HEADING_MAX_GAP` (100 ms). That last hole is real — the whole mix chain stops running while the robot is disarmed. `FAC_IMU_RESET_heading()` zeroes the accumulator and resynchronises; a heading-hold mix calls it whenever the pilot commands a turn.
 
 ### 8.14 `Libraries/LSM6DS3` — IMU driver
 
@@ -602,16 +710,35 @@ Each `GET_accel_*` / `GET_gyro_*` call performs a **blocking I²C read** of that
 HAL_StatusTypeDef LSM6DS3_init(LSM6DS3 *obj, I2C_HandleTypeDef *hi2c);
 HAL_StatusTypeDef LSM6DS3_init_accel(LSM6DS3 *obj);
 HAL_StatusTypeDef LSM6DS3_init_gyro (LSM6DS3 *obj);
-void LSM6DS3_update_accelerometer_single_value(LSM6DS3 *obj, uint8_t axis);
-void LSM6DS3_update_accelerometer_all_values  (LSM6DS3 *obj);
-void LSM6DS3_update_gyroscope_single_value    (LSM6DS3 *obj, uint8_t axis);
-void LSM6DS3_update_gyroscope_all_values      (LSM6DS3 *obj);
-void LSM6DS3_calculate_offset(LSM6DS3 *obj);
+HAL_StatusTypeDef LSM6DS3_update_all_values(LSM6DS3 *obj);               // both sensors, one transaction
+HAL_StatusTypeDef LSM6DS3_update_accelerometer_all_values(LSM6DS3 *obj);
+HAL_StatusTypeDef LSM6DS3_update_gyroscope_all_values    (LSM6DS3 *obj);
+HAL_StatusTypeDef LSM6DS3_measure_still(LSM6DS3 *obj, LSM6DS3_still_measure *out);
+void              LSM6DS3_SET_gyro_offsets(LSM6DS3 *obj, const int16_t offsets[LSM6DS3_AXIS_NUMBER]);
 ```
 
-`LSM6DS3_init` verifies `WHO_AM_I == 0x6A` and returns `HAL_ERROR` if a different device answers. Results are written into the object's `acc_*` (g) and `gyro_*` (deg/s) fields; `axis` is `X_AXIS` / `Y_AXIS` / `Z_AXIS`.
+The driver is a **pure register interface**: it stores raw counts in `accel[]` / `gyro[]` and performs no unit conversion at all — that belongs to `fac_imu`, which owns the sensitivity constants' meaning. Every function returns a `HAL_StatusTypeDef` and **every caller must check it**: an unverified read leaves the previous values in place and looks exactly like a sensor standing still.
 
-`LSM6DS3_calculate_offset` averages 200 gyro samples per axis and stores the negated result in `gyro_offsets[LSM6DS3_AXIS_NUMBER]`, which `LSM6DS3_update_gyroscope_single_value` then adds to every reading. The call blocks for ~1 s and refreshes the IWDG in its loop.
+`LSM6DS3_init` accepts **either** `WHO_AM_I` value — `0x69` (LSM6DS3) or `0x6A` (LSM6DS3TR-C), which share the register map used here — and stores the one that answered in `obj->who_am_i` for diagnosis. It returns `HAL_ERROR` when nothing answers or when the id is neither. It then sets `BDU` and `IF_INC` in `CTRL3_C`; **both bits are load-bearing** — `IF_INC` is what makes a burst read return consecutive registers instead of the same one repeatedly, and `BDU` is what keeps a multi-byte read from straddling two samples. It does **not** call `HAL_I2C_Init`: the bus is shared with the EEPROM and brought up once by `MX_I2C1_Init`.
+
+The gyro and accelerometer output registers are contiguous (`0x22`…`0x2D`), which is what lets `LSM6DS3_update_all_values` fetch **twelve bytes, both sensors, all six axes, in one transaction**.
+
+`LSM6DS3_measure_still` is the **measurement primitive the calibration is built on, and it decides nothing** — keeping the driver a pure register interface. It takes 128 samples with **one 12-byte burst read each**, so the gyroscope and the accelerometer are averaged over the very same window at no extra cost on the bus (the offset loop it replaced read the gyro block alone, which is what used to make an accelerometer mean an extra transaction rather than a free by-product). It fills a `LSM6DS3_still_measure`:
+
+```c
+typedef struct LSM6DS3_still_measure {
+    int16_t  gyro_mean [LSM6DS3_AXIS_NUMBER];   /* raw counts, average over the window */
+    int16_t  accel_mean[LSM6DS3_AXIS_NUMBER];
+    uint16_t gyro_span [LSM6DS3_AXIS_NUMBER];   /* max - min per axis, the motion detector */
+    uint16_t accel_span[LSM6DS3_AXIS_NUMBER];
+} LSM6DS3_still_measure;
+```
+
+The **spans** are what make the measurement judgeable: a mean alone cannot tell a robot standing on a floor from one being carried across the arena. Whether the window was still enough, and what the numbers mean, is `fac_imu`'s decision ([§8.13](#813-fac_imu--motion-sensing)).
+
+The averages are **true averages** accumulated on `int32_t` and divided once at the end — not the `average = (average + sample) / 2` pattern, which is an exponential filter whose residual noise is that of three readings whatever the sample count (issue #22). 128 is a power of two so the division folds to a shift instead of an `__aeabi_idiv`. The call blocks ~400 ms, refreshes the IWDG in its loop, and requires the robot to stand still. It **zeroes `gyro_offsets[]` first**, so what it measures is the bare sensor and not what a previous calibration already corrected; on any failed read it returns `HAL_ERROR` and leaves them at zero, since half an average would be subtracted from every later reading — putting the previous ones back is the caller's decision, and `FAC_IMU_calibrate()` does exactly that.
+
+`LSM6DS3_SET_gyro_offsets` installs the per-axis corrections the update functions add to every reading — summed on `int32_t` and saturated back, so a reading near the negative full scale plus a negative offset cannot wrap into a large positive one. They are **corrections, not measurements**: the caller passes the *negated* mean.
 
 ### 8.15 `Libraries/DMApwm` — soft-PWM engine
 
@@ -689,7 +816,12 @@ fac_value_t FAC_math_from_range(int32_t x, int32_t in_min, int32_t in_max);     
 int32_t FAC_math_mul_scaled(int32_t a, int32_t b, int32_t scale); // 1 division — a*b/scale, 0 if scale is 0
 int32_t FAC_math_div_scaled(int32_t a, int32_t b, int32_t scale); // 1 division — a*scale/b, 0 if b is 0
 int32_t FAC_math_clamp_to  (int32_t v, int32_t min, int32_t max); // 0 divisions
+int32_t FAC_math_sqrt      (int32_t v);                           // 0 divisions, but 16 steps — see below
 ```
+
+`FAC_math_sqrt` is **exact**, unlike the trigonometry below it: it returns the largest `r` with `r*r <= v`, i.e. the real square root truncated toward zero, and `0` for a negative `v`. Verified against a reference over 439 116 values — every integer up to 300 000 plus the neighbourhood of **every** perfect square across the whole `int32_t` range — with no disagreement. It is implemented by the binary restoring method (shift, compare, subtract only), so it emits **no library call whatsoever**, not even `__aeabi_idiv`; it is not free either, since it always walks 16 steps, so budget it like a couple of divisions.
+
+> **Scaling is the caller's job.** `sqrt(x × scale)` is `sqrt(x) × sqrt(scale)`, so a root taken of a scaled value comes back on **half** the scale. To keep the result on the scale the input was in, multiply the input by that scale once more before calling. The catch is the `int32_t` ceiling: after that pre-multiplication the argument must still fit, i.e. stay under ~2×10⁹ — which is exactly where a caller has to choose its units. For the centripetal speed of a melty brain (`ω = √(a/r)`), milli-radians per second overflow and centi-radians per second do not.
 
 **3) Angles and trigonometry** — a full turn is `FAC_ANGLE_TURN` = 4096 units (so wrapping is one `AND`, not a modulo); no lookup table, polynomial approximations instead:
 
@@ -700,9 +832,9 @@ fac_value_t FAC_math_cos(int32_t angle);                // 4 (calls sin with a q
 int32_t     FAC_math_atan2(int32_t y, int32_t x);        // 6 divisions — full turn, 0 when x=y=0
 ```
 
-Measured against the real functions over a whole turn: `sin`/`cos` within 2 units out of 1000 (0.2 %) and exact at the quadrant points; `atan2` within 2 angle units, i.e. 0.18°.
+Measured against the real functions over a whole turn: `sin`/`cos` within 2 units out of 1000 (0.2 %) and exact at the quadrant points; `atan2` within 2 angle units, i.e. 0.18°. These three are approximations; `FAC_math_sqrt` in group 2 is not — it is exact.
 
-**Cost model**: the M0 has no hardware divider and no long multiply, so the compiler cannot fold a constant `/1000` into a multiply-and-shift — even that becomes an `__aeabi_idiv` call. The division counts above are exact for each primitive; `clamp`/`abs`/`add`/`sub`/`min`/`max`/`clamp_to`/`angle_wrap` cost none, which is why a mix built only out of those (the simple tank mix, for instance) costs **no division at all**.
+**Cost model**: the M0 has no hardware divider and no long multiply, so the compiler cannot fold a constant `/1000` into a multiply-and-shift — even that becomes an `__aeabi_idiv` call. The division counts above are exact for each primitive; `clamp`/`abs`/`add`/`sub`/`min`/`max`/`clamp_to`/`angle_wrap` cost none, which is why a mix built only out of those (the simple tank mix, for instance) costs **no division at all**. `sqrt` is the one entry not to read as a cost: it pays no division but is not free, being a fixed 16 iterations.
 
 ---
 
@@ -744,14 +876,17 @@ Virtual COM port (CDC). The host sends a small command packet; the device answer
 | 1 | `READ_RANGE` | `[1, code]` | `[1, code, minMSB, minLSB, maxMSB, maxLSB]` |
 | 2 | `WRITE` | `[2, code, valMSB, valLSB]` | `73` (ack) |
 | 3 | `PING` | `[3]` | `73` (ack) |
-| 4 | `TELEMETRY_REQUEST` | `[4]` | 27-byte telemetry packet |
+| 4 | `TELEMETRY_REQUEST` | `[4]` | 34-byte telemetry packet (27 bytes up to 2.0.x) |
 | 5 | `TELEMETRY_RESPONSE` | — | (marker byte of the telemetry packet) |
 | 6 | `SAVE_TO_EEPROM` | `[6]` | `73` (ack) |
 | 7 | `APPLY_SETTINGS` | `[7]` | `73` (ack) |
+| 8 | `BOOTLOADER` | `[8, 0, 0, 0]` query / `[8, 1, 'B', 'L']` enter | query: `[8, protocol, blVerMSB, blVerLSB]` (all `0` without bootloader); enter: `73`, then reset into the bootloader |
 
 `WRITE` only updates RAM. `SAVE_TO_EEPROM` persists; `APPLY_SETTINGS` re-runs `FAC_app_init_all_modules()` so changes take effect without a reboot. The ack byte is `73` (`0x49`).
 
-### Telemetry packet (27 bytes)
+`BOOTLOADER` (from 2.1.0) reads the bootloader information block at `0x080000C0` for the query; with the key `'B','L'` it writes the "stay" request into the block shared with the bootloader (`0x200000C0`, survives a reset) and resets. A wrong key gets no reply. Firmware without the command (2.0.x) never answers, which is how the FAC Tool knows an update needs the DFU recovery.
+
+### Telemetry packet (34 bytes)
 
 | Offset | Size | Content |
 |---|---|---|
@@ -763,14 +898,27 @@ Virtual COM port (CDC). The host sends a small command packet; the device answer
 | 21–22 | 2 | Accel X in mg (**signed**) |
 | 23–24 | 2 | Accel Y in mg (**signed**) |
 | 25–26 | 2 | Accel Z in mg (**signed**) |
+| 27–28 | 2 | Gyro X in 0.1 dps (**signed**) |
+| 29–30 | 2 | Gyro Y in 0.1 dps (**signed**) |
+| 31–32 | 2 | Gyro Z in 0.1 dps (**signed**) |
+| 33 | 1 | IMU status: bit 0 `WORKING`, bit 1 `CALIBRATED`, bits 2–7 reserved (sent as 0) |
+
+Bytes 27–33 were added in **2.1.0** and are appended, so the first 27 bytes are exactly the packet a 2.0.x board sends; the FAC Tool chooses the length it expects from `FIRMWARE_VERSION` (code 62). The command and the version number are unchanged.
+
+- **Accel and gyro are body axes** (X towards the front edge, opposite the USB; Y left; Z towards the component side; positive rotation counter-clockwise looking from the tip of the axis), with the calibration offsets applied — the `_raw` accessors, **not** the levelled ones.
+- Gyro is `FAC_IMU_GET_gyro_*_mdps() / 100`: the full scale (`32768 × 70 mdps ≈ ±2293 dps`) is `±22937`, which fits `int16_t` without saturating.
+- `WORKING` = `FAC_IMU_GET_is_initialized() && FAC_IMU_GET_status() == HAL_OK`, evaluated **after** the `FAC_IMU_update()` of the same request, so it describes the values in this packet. `CALIBRATED` = `FAC_IMU_GET_is_calibrated()`. The bit masks are `TELEMETRY_IMU_STATUS_*` in `fac_settings.h`.
+- With `WORKING = 0` accel and gyro are **sent as 0**: a dead sensor keeps its last reading, which would otherwise look like a robot standing perfectly still.
 
 > Keep this table, the comment above `FAC_settings_USB_SEND_telemetry()`, and the FAC Tool in sync.
 
-With `IM_TESTING_FAC_TOOL` defined, all telemetry fields are **simulated** (channels ramp, voltage cycles through 1S–4S values, state cycles) so the tool can be developed without a robot.
+With `IM_TESTING_FAC_TOOL` defined, all telemetry fields are **simulated** (channels ramp, voltage cycles through 1S–4S values, state cycles, accel ramps, gyro ramps on `-500…499` tenths of dps, IMU status fixed at `0x03`) so the tool can be developed without a robot.
 
 ---
 
 ## 10. Extending the firmware
+
+> For the full contract a **generated** mix or special function has to respect — the value scale, the immutable boilerplate, every callable primitive with its cost and range limits, the sensor and state/time API, and the registration problem — see [README_MIX_EDITOR_API.md](README_MIX_EDITOR_API.md). It is written for the planned graphical mix/function editor, but it is the authoritative reference for a hand-written mix too.
 
 ### Adding a mix
 
@@ -808,7 +956,7 @@ Adding a new `.c` file requires regenerating the STM32CubeIDE build files (`Debu
 
 Found while documenting the code. Numbering is kept stable, so entries move to [11.1 Fixed](#111-fixed) or [11.2 Withdrawn](#112-withdrawn-not-bugs) instead of being renumbered. The same list is tracked in [CLAUDE.md](CLAUDE.md).
 
-What remains open is one enum entry whose feature was never written; everything else, including #19–#21 found later from a live hardware report rather than from reading the code, is closed:
+What remains open is one enum entry whose feature was never written; everything else is closed — including #19–#21 and #30, found from live reports rather than from reading the code, and #22–#29, found during the IMU pass that converted that module to integers:
 
 | # | Severity | Location | Issue |
 |---|---|---|---|
@@ -820,7 +968,7 @@ What remains open is one enum entry whose feature was never written; everything 
 |---|---|---|---|---|
 | 1 | **High** | `fac_std_receiver.c` `FAC_std_receiver_is_connected()` | The round-robin index reached `0` once every 9 calls, because the `if (channelToCheck == 0) channelToCheck++` guard corrected the *previous* value while the check used the *new* one. `FAC_std_receiver_GET_channel(0)` then read `channels[-1]`, and in PWM mode also called `FAC_pwm_receiver_calculate_channel_value(0)` — which reads `channels_t2[-1]`, i.e. `channels_t1[3]`, and on a passing range check writes `receiver.channels[-1]`, `pwmReceiver.channels_t1[-1]` and zeroes CH4's rising-edge timestamp. Garbage in the adjacent word could make the board report "receiver connected" and arm without an RC link. | The index now cycles with `channelToCheck = (channelToCheck % RECEIVER_CHANNELS_NUMBER) + 1`, which can only produce `1 … RECEIVER_CHANNELS_NUMBER`. `FAC_std_receiver_GET_channel()` additionally returns `0` for any `chNumber` outside that range, before touching any backend. |
 | 2 | **High** | `fac_battery.c` `FAC_battery_GET_cell_voltage()` | Returned `battery.voltage` (pack) instead of `single_cell_voltage`, and `FAC_battery_calculate_cell_voltage()` never divided by the cell count — so `single_cell_voltage` was write-only dead state. Low-battery detection compared the pack voltage against a per-cell threshold (clamped to 2800…4000 mV), so on 2S and above **low battery could never trigger**: a 2S at 3.4 V/cell reads 6800 mV, well above a 3400 mV threshold. | `FAC_battery_calculate_cell_voltage()` now divides the pack voltage by the cell count held in `battery.type`, falling back to a divider of 1 when the type is `BATTERY_TYPE_USB` (value 0 — would be a division by zero) or `BATTERY_TYPE_NONE`. The getter returns `battery.single_cell_voltage`. `fac_app.c` renamed its local to `vcell` and now feeds both the low-battery and the cut-off comparisons with it. |
-| 3 | **High** | `LSM6DS3.h` / `fac_imu.h` | `int16_t gyro_offsets[]` was a flexible array member, so it contributed 0 to `sizeof(LSM6DS3)` (28 bytes) and had no storage — yet `LSM6DS3` is embedded **by value** inside `Gyro`. Verified against the committed build: `gyro` sat at `0x200003e0` with `sizeof(Gyro) == 0x20`, `gyro_status` at offset 28, and `.bss.motors` immediately after at `0x20000400`. `LSM6DS3_calculate_offset()` stored `[0]`→bytes 28-29 (**over `gyro_status`**), `[1]`→30-31 (padding), `[2]`→32-33 (**past `gyro`, onto the low half-word of `motors[0]`, the Motor 1 pointer**). Latent only by luck of init ordering: `FAC_IMU_GET_status()` is read before the calibration and `FAC_motor_init()` reassigns `motors[0]` right after it. Also a C99/C11 constraint violation (§6.7.2.1p3) that GCC accepts silently. | The array is now sized: `int16_t gyro_offsets[LSM6DS3_AXIS_NUMBER]`, with the new `LSM6DS3_AXIS_NUMBER` (3) also replacing the hardcoded `3` in the three axis loops. `sizeof(LSM6DS3)` 28 → 36, `sizeof(Gyro)` 32 → 40; 8 bytes of RAM, no signature or protocol change. |
+| 3 | **High** | `LSM6DS3.h` / `fac_imu.h` | `int16_t gyro_offsets[]` was a flexible array member, so it contributed 0 to `sizeof(LSM6DS3)` (28 bytes) and had no storage — yet `LSM6DS3` is embedded **by value** inside `Gyro`. Verified against the committed build: `gyro` sat at `0x200003e0` with `sizeof(Gyro) == 0x20`, `gyro_status` at offset 28, and `.bss.motors` immediately after at `0x20000400`. `LSM6DS3_calculate_offset()` (the offset loop of the time, since replaced by `LSM6DS3_measure_still()`) stored `[0]`→bytes 28-29 (**over `gyro_status`**), `[1]`→30-31 (padding), `[2]`→32-33 (**past `gyro`, onto the low half-word of `motors[0]`, the Motor 1 pointer**). Latent only by luck of init ordering: `FAC_IMU_GET_status()` is read before the calibration and `FAC_motor_init()` reassigns `motors[0]` right after it. Also a C99/C11 constraint violation (§6.7.2.1p3) that GCC accepts silently. | The array is now sized: `int16_t gyro_offsets[LSM6DS3_AXIS_NUMBER]`, with the new `LSM6DS3_AXIS_NUMBER` (3) also replacing the hardcoded `3` in the three axis loops. `sizeof(LSM6DS3)` 28 → 36, `sizeof(Gyro)` 32 → 40; 8 bytes of RAM, no signature or protocol change. |
 | 4 | **Medium** | `fac_settings.c` `FAC_settings_SET_value()` and the USB send helpers | The setting code arrives straight from USB (`comSerialBuffer[1]`, so `0…255`) and was never checked against `FAC_SETTINGS_CODE_LAST` (64), giving an out-of-bounds read/write on `settings[]` from a single malformed 4-byte packet. `Setting` is 8 bytes and the committed build placed `.data.settings` at `0x20000000`, the very first object in RAM, so `settings[code].value` reached `SystemCoreClock` at code 64, `uwTickPrio` at 65, and the USB CDC configuration descriptors from 66 on — and the value stored was arbitrary anyway, since the clamp read a garbage `min`/`max`. `FAC_settings_GET_value()` already checked. | The same guard added to all three: `if (code >= FAC_SETTINGS_CODE_LAST) return;`. An unknown code is now ignored on write and gets no reply on the two read commands. The `WRITE` ack byte is unchanged — `command_response()` still sends it — since a NACK convention would be a FAC Tool protocol change. |
 | 6 | **Medium** | `fac_jingles.c` | Called `FAC_motor_make_noise()` without including `FAC_Code/fac_motors.h`; it compiled only via implicit declaration (a `-Wall` warning, and an error under C99+ strictness). | Fixed by the author: `#include "FAC_Code/fac_motors.h"` added to `fac_jingles.c`. |
 | 7 | **Low** | `fac_servo.c` `FAC_servo_apply_settings()` | `((max-min)/100) * position / 10` truncated the span before scaling, losing up to ~100 µs of travel at full deflection, and a span below 100 µs made `span/100` evaluate to `0` — pinning the servo at `min_us` for every stick position. The settings ranges permit a span as small as 2 µs (`min ≤ 1499`, `max ≥ 1501`). The `/100` was there to avoid a 16-bit overflow, since `span × position` can reach ≈ 2.8 M. The default 1000/2000 configuration hid the bug entirely: `span/100 = 10` exactly, so the result was exact. | Single division on a 32-bit intermediate: `p = ((uint32_t) span * position) / MAX_SERVO_VALUE`. `MAX_SERVO_VALUE` was `RECEIVER_CHANNEL_RESOLUTION-1` **without parentheses** — harmless in the existing comparison/subtraction uses but wrong as a divisor, so it is now parenthesised. At full deflection the default config now reaches `CCR = 2000` instead of 1999. |
@@ -837,6 +985,15 @@ What remains open is one enum entry whose feature was never written; everything 
 | 19 | **High** | `fac_std_receiver.c`, `Libraries/DMApwm.c`, `fac_servo.c` | Found from a live hardware report — motors and servos kicking hard enough to spike current draw and occasionally brown out the supply on every FAC Tool "apply" — not from reading the code. `FAC_app_init_all_modules()` (USB command 06) unconditionally re-ran the boot-time init of every output module on a robot that could be armed and moving. `FAC_std_reciever_init()` zeroed `receiver.channels[]`; a channel of `0` decodes to `-1000` (`FAC_math_from_range(0,0,1000)`), i.e. full negative travel, not "no signal", so every mix/function briefly commanded full reverse / servo end-stop until the next RC frame (~20 ms). `initDMApwm()` zeroed the soft-PWM buffer via `zeroSoftPWM()`; a zeroed BSRR entry writes nothing, so the six motor pins **froze** at whatever level they held at that instant instead of resuming a duty cycle. `FAC_servo_apply_new_freq()` called `HAL_TIM_Base_Init()`, whose `TIM_Base_SetConfig()` ends with `EGR = TIM_EGR_UG`, an immediate update event that restarts TIM3's counter mid-pulse, truncating or doubling whichever pulse was in flight. | Each of the three modules now carries a `static uint8_t <module>Initialized` flag. `FAC_std_reciever_init()` returns immediately when the receiver `type` is unchanged. `FAC_motor_init()` only calls the buffer-clearing `initDMApwm()` on the first call; a later frequency change goes through `FAC_DMA_pwm_change_freq()` alone. `FAC_servo_init()` only calls `FAC_servo_apply_new_freq()` when the frequency setting actually changed, and its two safety `FAC_servo_disable()` calls are boot-only. Speed, direction, servo-enable and servo-position are never re-applied by these inits — the mapper rewrites them on the next loop pass regardless. See [§6.4](#64-applying-settings-without-disturbing-a-live-robot). |
 | 20 | **High** | `fac_eeprom.c` `FAC_eeprom_write_byte()` | Found alongside #19, while auditing `FAC_settings_STORE_ALL_to_eeprom()` after the same hardware report. `FAC_eeprom_write_byte()` blocks ~10 ms per byte and nothing on the EEPROM path refreshed the IWDG (~400 ms timeout — this file previously stated 500 ms, which was also wrong; see [§7](#7-timing-and-the-watchdog)). A save with ~20 or more **changed** settings (20 ms each) already exceeds the timeout and resets the board mid-write, leaving the EEPROM with new values up to the setting it reached and stale ones after it, silently. **Not confirmed as the cause of any specific report** — a save of only a handful of settings, with the FAC Tool waiting for each write's ack before sending the next, stays far under the threshold — but a real, independent defect on any larger save regardless. | `HAL_IWDG_Refresh(&hiwdg)` added inside `FAC_eeprom_write_byte()`, immediately before the blocking `HAL_Delay(10)`. The main-loop refresh cannot substitute for it, since it only runs after the whole USB command has already returned. |
 | 21 | **Medium** | `fac_mapper.c` `FAC_mapper_apply_to_devices()` | Found alongside #19. The `if (mN_link) { … }` blocks for the three DC motors had no `else`, unlike the servo blocks a few lines below, which already forced a disabled servo's PWM off on every pass. A motor that was mapped, then unmapped (link value set to `0`) through the FAC Tool, kept running at its last commanded speed and direction forever — the mapper simply stopped writing to it instead of stopping it. | Each motor block now has an `else FAC_motor_set_speed_direction(n, FORWARD, 0);`, mirroring the servo disable a few lines below and matching what the function's own doc comment already claimed ("unmapped devices are forced safe"). |
+| 22 | **High** | `LSM6DS3.c` `LSM6DS3_calculate_offset()` (since replaced by `LSM6DS3_measure_still()`, which keeps the true average) | Found during the IMU pass. The loop body was `avg = avg + sample; avg = avg / 2;`, which is **not an average of 200 samples** but an exponential filter with a weight of one half. Its residual noise is that of averaging **three** readings, whatever the sample count — so the function spent ~1 s of boot and 600 I²C transactions to buy almost nothing, and each `/2` truncated toward zero, biasing the result. The `int16_t` accumulator could also overflow (`avg + sample` reaches twice full scale) if the robot was moved while powering up, which is signed overflow, i.e. UB. | A true average: `int32_t sum[]` accumulated over **128** samples, divided once at the end with round-to-nearest and saturated back into `int16_t`. 128 is a power of two, so the division is a shift rather than an `__aeabi_idiv`. Sampling is spaced 3 ms, just above the 2.4 ms of the 416 Hz output data rate, so no sample is counted twice: boot cost drops from ~1 s to ~400 ms **and** the residual offset error is divided by about 11. A failed read now aborts and leaves the offsets at zero rather than committing a partial average. |
+| 23 | **Medium** | `LSM6DS3.c` gyro offset application | `int16_t axis_g = read(...) + offset` computed the sum on `int` and then **truncated it to 16 bits**. With a reading near the negative full scale and a negative offset the result wraps into a large positive value: at ±2000 dps that is the gyroscope reporting a full-speed spin **in the wrong direction**, precisely when the robot is spinning hardest. | The sum is done on `int32_t` and saturated back with `saturate_to_int16()`, so the reading pins at full scale instead of changing sign. The same helper guards the stored offset. |
+| 24 | **Medium** | `fac_imu.c` | `FAC_IMU_init_accelerometer()` / `_init_gyroscope()` overwrote `gyro_status` unconditionally — their `if (FAC_IMU_GET_status() != HAL_ERROR)` guards were commented out — and `fac_app.c` discards the return value of `FAC_IMU_init()`. Net effect: **the `WHO_AM_I` check was disarmed**. Any chip that answered at `0x6A` and acknowledged a register write came back `HAL_OK`, with no 20-blink diagnostic, even though identification had failed. Symmetrically, `FAC_IMU_init()` set the status only on failure, so the success path worked purely because the struct is zero-initialised and `HAL_OK` is `0`. | The guards are restored as real code: both init steps return early when the status is already `HAL_ERROR`, and `FAC_IMU_init()` now sets the status on **both** outcomes. `FAC_IMU_compute_gyro_offset()` got the same guard (that function has since been replaced by `FAC_IMU_calibrate()`, which carries the guard forward). |
+| 25 | **Medium** | `LSM6DS3.h` | Only `0x6A` was accepted, with a commented-out note about "a Chinese clone" answering `0x69`. `0x69` is in fact the id of the **original LSM6DS3** and `0x6A` that of the **LSM6DS3TR-C**; the two share the register map this driver uses. A board populated with the other part failed identification and booted with no IMU at all. | Both ids are accepted (`WHO_AM_I_VALUE_LSM6DS3` / `_LSM6DS3TRC`) and the one that actually answered is kept in `obj->who_am_i`, so which part is fitted stays visible in the debugger instead of being a boot failure. |
+| 26 | **Medium** | `LSM6DS3.c` all read helpers | The return status of `HAL_I2C_Mem_Read` was **discarded everywhere**. A sensor that dropped off the bus left the previous values in the buffer and kept reporting them for the rest of the run, with `gyro_status` still `HAL_OK` — indistinguishable from a sensor holding perfectly still, which is exactly the reading a self-righting or stabilisation function would trust. | Every read returns its status and every caller checks it. A failed read propagates to `gyro_status`, leaves the last values in place, and `FAC_IMU_GET_status()` is documented as the way to tell fresh data from stale. |
+| 27 | **Low** | `LSM6DS3.h` `TIMEOUT_I2C` | 100 ms per transaction against a **~400 ms watchdog**: three axis reads on a locked bus (300 ms) already came within one main-loop pass of a reset, and the telemetry path did exactly three. | Reduced to 10 ms, about 60× what a 12-byte burst legitimately needs on this bus. Paired with the once-a-second retry backoff in `FAC_IMU_update()`, a dead sensor now costs one 10 ms timeout per second instead of one per read. |
+| 28 | **Info** | `LSM6DS3.c` `LSM6DS3_init()` | Called `HAL_I2C_Init()` on the shared bus handle, from inside a device driver, on a peripheral already brought up by `MX_I2C1_Init()` and already in use by the EEPROM. Harmless in effect (the re-init lands on the same configuration) but a layering violation: a device driver briefly disabling the bus every other device shares. | Removed. The bus is initialised once by CubeMX-generated code, as for every other peripheral. |
+| 29 | **Info** | `fac_imu.c`, `fac_settings.c` | Performance, not a defect. Each `FAC_IMU_GET_accel_*()` performed its own blocking I²C transaction, so telemetry cost **three** round trips for data that lives in six contiguous registers. The values were then converted raw → g in floats (`× 0.488f / 1000.0f`) only for the telemetry to convert them straight back with `× 1000.0f` — a float multiply, divide and two conversions per axis, on a core with no FPU, to recover what is `raw × 488 / 1000` in integers. The IMU was the last float island left after the fixed-point conversion of the mix/function/mapper chain. | `FAC_IMU_update()` fetches all six axes in **one** transaction and the accessors became free field reads. The driver stores raw counts and `fac_imu` converts with `fac_math.h` group 2, whose header already named gyro/accel processing as its purpose. Verified on the generated code: **zero soft-float calls** in `LSM6DS3.c` and `fac_imu.c`, zero divisions in the driver, and one division per `_mg` accessor with **none** in `_mdps`. |
+| 30 | **Medium** | `fac_settings.c` `FAC_settings_STORE_new_firmware_version()`, `FAC_settings_init()` | Found from a user report: a board running 2.1.0 reported **2.0.0** to the FAC Tool. Three defects stacked on the same value. (a) The function wrote the packed version to the **EEPROM only**, never to `settings[]` — and `settings[]` is what `FAC_settings_USB_SEND_setting_value()` answers with, so the tool kept getting the value loaded at boot. (b) It ran **first** in `FAC_settings_init()`, before `FAC_eeprom_init()` and the load/defaults branch, so its write was immediately undone: on a version bump the tag mismatch makes `FAC_settings_STORE_ALL_to_eeprom()` rewrite the whole EEPROM from the defaults, version included. (c) The default in the `settings[]` table was the literal `20000`, a hardcoded `2.0.0` left behind by an earlier release — which is exactly the value the reset in (b) wrote back. Net effect: after flashing 2.1.0 the EEPROM and the array both held `20000`, and every later boot loaded that same stale value. | The packed form is now `FIRMWARE_VERSION_VALUE` in `config.h` (`major*10000 + minor*100 + patch`), used as the **table default** so a factory reset writes the running version. `FAC_settings_STORE_new_firmware_version()` takes that value, updates **`settings[]` via `FAC_settings_SET_value()` as well as** the EEPROM, and is called at the **end** of `FAC_settings_init()`, after the load. On a version bump the defaults branch already writes the right version, so the EEPROM write is skipped as unchanged; on a normal boot after an update the loaded version differs once, costing a single 20 ms EEPROM write. See [§6.2](#62-persistence). |
 
 ### 11.2 Withdrawn (not bugs)
 

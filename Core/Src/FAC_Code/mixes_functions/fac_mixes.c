@@ -14,6 +14,8 @@
 /* NEW MEXES */
 //#include "FAC_Code/mixes_functions/mixes/fac_<name>_mix.h"			// 6) of HOW TO MAKE A MIX
 #include "FAC_Code/mixes_functions/mixes/fac_simple_tank_mix.h"
+#include "FAC_Code/mixes_functions/mixes/fac_simple_tank_keep_direction_mix.h"
+
 
 static Mixes mixes;
 /* STATIC FUNCTION PROTORYPES */
@@ -138,6 +140,10 @@ void FAC_mix_update(void) {						// 5) of HOW TO MAKE A MIX
 	case FAC_MIX_SIMPLE_TANK:
 		FAC_simple_tank_mix_update();
 		break;
+	case FAC_MIX_SIMPLE_TANK_KEEP_DIRECTION:
+		FAC_simple_tank_keep_direction_mix_update();
+		break;
+
 		/*
 		 case FAC_MIX_<NAME>:
 		 FAC_<name>_mix_update();

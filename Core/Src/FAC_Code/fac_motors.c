@@ -61,10 +61,13 @@ static void FAC_motor_SET_reverse(uint8_t motorNumber, uint8_t isReversed) {
 }
 
 static void FAC_motor_SET_speed(uint8_t motorNumber, uint16_t speed) {
-	if (speed <= MAX_DMA_PWM_VALUE)	// (MAX_DMA_PWM_VALUE = 999, 1000-1 because zero is counted)
+	// MOTOR_SPEED_RESOLUTION (= PWM_STEPS, DMApwm.h:25) is an admissible duty, not one past the end:
+	// setSoftPWM accepts duty == PWM_STEPS and its loop then drives the pin high for the whole
+	// period, a true 100%. Clamping at PWM_STEPS - 1 here was what capped full stick just short of it
+	if (speed <= MOTOR_SPEED_RESOLUTION)
 		motors[motorNumber - 1]->speed = speed;
 	else
-		motors[motorNumber - 1]->speed = MAX_DMA_PWM_VALUE;
+		motors[motorNumber - 1]->speed = MOTOR_SPEED_RESOLUTION;
 }
 
 static void FAC_motor_SET_break_en(uint8_t motorNumber, uint8_t brake_en) {
@@ -82,7 +85,11 @@ static void FAC_motor_apply_settings(uint8_t motorNumber) {
 	uint16_t speed = FAC_motor_GET_speed(motorNumber);
 	uint8_t true_motor_number = motorNumber - 1;	// because the array start from zero
 	/* MOTOR LOGIC (IN-IN DRIVER, NOT PH-EN) */
-	/* Logic example on the motor1 M1	(use -1 on every duty because the resolution is 1000 steps, considering also zero the max number is 999 ALREADY CONSIDERED ON MAX_DMA_PWM_VALUE)
+	/* Logic example on the motor1 M1	(the full-scale duty is PWM_STEPS, NOT PWM_STEPS - 1: setSoftPWM
+	 * accepts duty == PWM_STEPS and holds the pin high for the whole period. Using MAX_DMA_PWM_VALUE
+	 * here while FAC_motor_SET_speed admits PWM_STEPS would make PWM_STEPS - 1 - speed underflow
+	 * uint16 at full throttle, and the complementary pin would go high alongside the always-on one:
+	 * a full-throttle command would BRAKE the motor. The two must stay consistent)
 	 * 			M1_F	M1_B
 	 * Forw.   1-DUTY	 1		// M1_B = 1 is with brake control enabled (more control of the motor)
 	 * Reve.	 1	   1-DUTY
@@ -90,16 +97,16 @@ static void FAC_motor_apply_settings(uint8_t motorNumber) {
 	 * Forw.    DUTY	 0		// M1_B = 0 is with coast control enabled (less control of the motor but no brake)
 	 * Reve.	 0	    DUTY
 	 *------------------------
-	 * Break	 1		 1
+	 * Break	 1		 1		// speed 0 in brake mode: both pins high, which is this row
 	 * Coast	 0		 0
 	 */
 	if (brake_en) {	// if brake disable the logic is inverted
 		if (dir == FORWARD) {
-			FAC_set_pwm_duty(motors[true_motor_number]->pinB, MAX_DMA_PWM_VALUE - speed);
-			FAC_set_pwm_duty(motors[true_motor_number]->pinF, MAX_DMA_PWM_VALUE);
+			FAC_set_pwm_duty(motors[true_motor_number]->pinB, PWM_STEPS - speed);
+			FAC_set_pwm_duty(motors[true_motor_number]->pinF, PWM_STEPS);
 		} else if (dir == BACKWARD) {
-			FAC_set_pwm_duty(motors[true_motor_number]->pinF, MAX_DMA_PWM_VALUE - speed);
-			FAC_set_pwm_duty(motors[true_motor_number]->pinB, MAX_DMA_PWM_VALUE);
+			FAC_set_pwm_duty(motors[true_motor_number]->pinF, PWM_STEPS - speed);
+			FAC_set_pwm_duty(motors[true_motor_number]->pinB, PWM_STEPS);
 		}
 	} else {
 		if (dir == FORWARD) {
