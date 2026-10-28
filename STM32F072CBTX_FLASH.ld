@@ -44,8 +44,10 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
 /* Memories definition */
 MEMORY
 {
-  RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 16K
-  FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 128K
+  /* 0x20000000-0x200000FF: vector table copy + block shared with the bootloader */
+  RAM    (xrw)    : ORIGIN = 0x20000100,   LENGTH = 16K - 0x100
+  /* after the 16K bootloader, before the "app valid" record page (0x0801F800) */
+  FLASH    (rx)    : ORIGIN = 0x8004000,   LENGTH = 110K
 }
 
 /* Sections */
@@ -57,6 +59,7 @@ SECTIONS
   {
     . = ALIGN(4);
     KEEP(*(.isr_vector)) /* Startup code */
+    KEEP(*(.fac_app_header)) /* bootloader header, must be at APP_BASE + 0xC0 */
     . = ALIGN(4);
   } >FLASH
 
@@ -186,3 +189,5 @@ SECTIONS
 
   .ARM.attributes 0 : { *(.ARM.attributes) }
 }
+
+ASSERT(fac_app_header == ORIGIN(FLASH) + 0xC0, "fac_app_header must sit right after the 48 vectors")

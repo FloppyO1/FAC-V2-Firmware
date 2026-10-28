@@ -79,6 +79,8 @@ The code is organised in layers, each in its own module under `Core/Src/FAC_Code
 
 ## 3. Boot sequence
 
+From 2.1.0 the firmware runs **under the USB CDC bootloader** (separate repository `FAC-V2-Bootloader`): the bootloader owns the first 16 KB of flash, checks the application at every reset and jumps to it at `0x08004000`. The very first thing `main()` does is `FAC_boot_relocate_vectors()`: the Cortex-M0 has no VTOR, so the vector table is copied to the start of SRAM and SRAM is remapped at address 0 before `HAL_Init()` enables any interrupt. After one second of main loop `FAC_boot_confirm()` tells the bootloader the boot went fine (3 unconfirmed boots in a row keep the board in the bootloader). See [§9](#9-usb-protocol-reference) for command 8.
+
 `main()` (CubeMX-generated) initialises the clocks and peripherals, then hands over to `FAC_app_init()`, which performs the following in a fixed order — the order matters, because later steps depend on settings loaded by earlier ones:
 
 1. **~300 ms settling delay** (watchdog refreshed around it).
@@ -878,8 +880,11 @@ Virtual COM port (CDC). The host sends a small command packet; the device answer
 | 5 | `TELEMETRY_RESPONSE` | — | (marker byte of the telemetry packet) |
 | 6 | `SAVE_TO_EEPROM` | `[6]` | `73` (ack) |
 | 7 | `APPLY_SETTINGS` | `[7]` | `73` (ack) |
+| 8 | `BOOTLOADER` | `[8, 0, 0, 0]` query / `[8, 1, 'B', 'L']` enter | query: `[8, protocol, blVerMSB, blVerLSB]` (all `0` without bootloader); enter: `73`, then reset into the bootloader |
 
 `WRITE` only updates RAM. `SAVE_TO_EEPROM` persists; `APPLY_SETTINGS` re-runs `FAC_app_init_all_modules()` so changes take effect without a reboot. The ack byte is `73` (`0x49`).
+
+`BOOTLOADER` (from 2.1.0) reads the bootloader information block at `0x080000C0` for the query; with the key `'B','L'` it writes the "stay" request into the block shared with the bootloader (`0x200000C0`, survives a reset) and resets. A wrong key gets no reply. Firmware without the command (2.0.x) never answers, which is how the FAC Tool knows an update needs the DFU recovery.
 
 ### Telemetry packet (34 bytes)
 

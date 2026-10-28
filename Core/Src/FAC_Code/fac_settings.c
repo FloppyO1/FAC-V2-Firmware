@@ -6,6 +6,7 @@
  */
 
 #include "FAC_Code/fac_settings.h"
+#include "FAC_Code/fac_boot.h"
 #include "usbd_cdc_if.h"
 #include "iwdg.h"
 
@@ -442,6 +443,9 @@ uint8_t FAC_settings_command_response(void) {
 		FAC_settings_STORE_ALL_to_eeprom();
 		CDC_Transmit_FS(&ping, 1);
 		commandUndestood = TRUE;
+		break;
+	case FAC_USB_COMMAND_BOOTLOADER:
+		commandUndestood = FAC_boot_USB_command(setting_code, &comSerialBuffer[2]);
 		break;
 	case FAC_USB_COMMAND_APPLY_SETTINGS:
 		FAC_app_init_all_modules();	// reinitialize all the modules to apply the new setting

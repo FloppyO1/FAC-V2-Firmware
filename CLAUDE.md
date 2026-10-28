@@ -30,6 +30,16 @@ STM32CubeIDE (Eclipse CDT) project — `.project`, `.cproject`, `FAC_Firmware_V2
 - **`Debug/` and `Release/` are git-ignored** (see `.gitignore`) — build artifacts and the generated makefiles are not versioned, so a fresh clone has to be built from the IDE once before `make -C Debug all` works. They were tracked up to and including commit `ac46e5f`, so `.o`/`.elf`/`.map` from older revisions are still reachable in history.
 - There are **no unit tests** and no host-side test harness. Verification is on hardware (or via the FAC Tool with `IM_TESTING_FAC_TOOL`, see below).
 
+### Bootloader (from 2.1.0, branch `with-bootloader`)
+
+The application is linked at **`0x08004000`** and runs under the USB CDC bootloader (own repository `FAC-V2-Bootloader`, spec `bootloader.md` / `firmware-bootloader.md` in the FAC Tool docs). What the application side does, all in `fac_boot.c`:
+- `fac_app_header` (16 bytes) at `0x080040C0`, right after the 48 vectors, placed by `KEEP(*(.fac_app_header))` in the linker script and checked by an `ASSERT` there. Debug builds set the `DEBUG` flag in it, so the bootloader starts them without the "app valid" record: **build, flash and debug over ST-LINK keeps working**, but only with the bootloader already on the board.
+- `FAC_boot_relocate_vectors()` first thing in `main()`: Cortex-M0 has no VTOR, so the vectors are copied to SRAM and SRAM is remapped at 0. RAM for the application starts at `0x20000100`; the first 256 bytes are the vector copy and the block shared with the bootloader. **Never call `HAL_DeInit()` or reset APB2**: it would undo the SYSCFG remap.
+- `FAC_boot_confirm()` in the main loop, after 1 s: clears the boot counter. Three resets in a row without confirmation keep the board in the bootloader.
+- USB command 8 `BOOTLOADER` (query / enter), see `docs/README_API.md` §9.
+- `fac_boot_shared.h` is **copied unchanged** from the bootloader repository: addresses and layouts must never diverge.
+- A **Release** written with ST-LINK over an application installed by the FAC Tool finds a stale record (CRC mismatch) and the board stays in the bootloader: reinstall it from the tool. The last flash page (`0x0801F800`) holds that record and is outside the application region.
+
 ### Regenerating from CubeMX
 
 `FAC_Firmware_V2.ioc` regenerates `Core/Src/{main,gpio,tim,adc,dma,i2c,spi,usart,iwdg}.c`, `USB_DEVICE/`, `Drivers/`, `Middlewares/`. Edits to those files must live inside `/* USER CODE BEGIN X */ … /* USER CODE END X */` blocks or they will be lost. All application logic lives in `Core/Src/FAC_Code/` and is untouched by regeneration.

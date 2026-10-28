@@ -108,7 +108,8 @@ enum FAC_USB_COMMAND_CODE {
 	FAC_USB_COMMAND_TELEMETRY_REQUEST,
 	FAC_USB_COMMAND_TELEMETRY_RESPONSE,
 	FAC_USB_COMMAND_SAVE_TO_EEPROM,
-	FAC_USB_COMMAND_APPLY_SETTINGS
+	FAC_USB_COMMAND_APPLY_SETTINGS,
+	FAC_USB_COMMAND_BOOTLOADER	// 8: [8, 0, 0, 0] query, [8, 1, 'B', 'L'] enter the bootloader
 };
 
 // Bits of the IMU status byte of the telemetry packet (offset 33). FAC Tool ABI: never renumber,
