@@ -11,7 +11,7 @@ updates are installed from the FAC Tool, with no drivers and no ST-LINK.
 
 - **Signal chain:** receiver → normalised channels → active mix / special functions → mapper → motors and servos.
   Every value along the chain is an integer on `[-1000, +1000]`; there is no floating point in it (the M0 has no FPU).
-- **Mixes and special functions:** one mix active at a time (up to 8 inputs, 10 outputs), up to 20 special functions
+- **Mixes and special functions:** one mix active at a time (up to 6 inputs, 4 numeric parameters, 10 outputs), up to 20 special functions
   running together. Each motor and servo output is linked to one of their outputs from the FAC Tool.
 - **States:** `DISARMED` → `NORMAL` → `CUTOFF`. Arming requires a connected receiver and calibrates the IMU;
   `CUTOFF` latches when the cell voltage stays below the threshold.

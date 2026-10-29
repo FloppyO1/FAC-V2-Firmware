@@ -124,7 +124,7 @@ With both resolutions equal to 1000 this resolves to the exact `2*rx - 1000`, wi
 - **A channel value of `0` is not "no signal", it is full negative travel** (`-1000`). The firmware has a separate connection gate (`FAC_std_receiver_GET_is_connected()`); an input value never says "no signal" by itself.
 - A slot whose input-channel setting is `0` is **disabled**, and its input is forced to `FAC_VALUE_ZERO`, not left stale.
 
-For a mix, each of the 8 inputs additionally has a **reversal** flag; when set the value is negated (`inputValue = -inputValue`) after normalization. Both the channel number and the reversal flag are **cached by `FAC_mixes_init()`**, so a change through the FAC Tool takes effect on the next *apply settings*, not on the USB write itself.
+For a mix, each of the 6 inputs additionally has a **reversal** flag; when set the value is negated (`inputValue = -inputValue`) after normalization. Both the channel number and the reversal flag are **cached by `FAC_mixes_init()`**, so a change through the FAC Tool takes effect on the next *apply settings*, not on the USB write itself.
 
 ### 3.4 Exactness rules — the ones a PC simulator must mirror
 
@@ -143,7 +143,7 @@ These are the rules that make the browser and the MCU produce **bit-identical** 
 
 ## 4. Anatomy of a generated mix
 
-A mix has **up to 8 inputs and 10 outputs**, and **exactly one mix is active at a time** (`FAC_SETTINGS_CODE_ACTIVE_MIX`). It is the right shape for coupled logic: differential steering, a melty-brain translation, anything where several outputs are computed together from shared state.
+A mix has **up to 6 inputs, 4 numeric parameters and 10 outputs**, and **exactly one mix is active at a time** (`FAC_SETTINGS_CODE_ACTIVE_MIX`). It is the right shape for coupled logic: differential steering, a melty-brain translation, anything where several outputs are computed together from shared state.
 
 ### 4.1 The `.c` file
 
@@ -307,19 +307,22 @@ If the tool emits a multi-instance function it must:
 ### 6.1 Available to a mix — `fac_mixes.h`
 
 ```c
-#define MIXES_MAX_INPUTS_NUMBER  8
+#define MIXES_MAX_INPUTS_NUMBER  6
+#define MIXES_MAX_PARAMS_NUMBER  4
 #define MIXES_MAX_OUTPUTS_NUMBER 10
 
 void        FAC_mixes_update_mix_inputs(void);
 void        FAC_mixes_update_mix_outputs(fac_value_t mix_output[]);
 fac_value_t FAC_mixes_GET_input (uint8_t inputNumber);    // 0-based
+int16_t     FAC_mixes_GET_param (uint8_t paramNumber);    // 0-based
 fac_value_t FAC_mixes_GET_output(uint8_t outputNumber);   // 0-based
 ```
 
 | Function | Semantics | Who calls it |
 |---|---|---|
-| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver: normalizes `0…1000` → `-1000…+1000`, applies the cached per-input reversal, forces a disabled input (channel `0`) to `FAC_VALUE_ZERO` | **The boilerplate**, once, at the top. Never call it from graph code |
-| `FAC_mixes_GET_input(i)` | The normalized value of input *i*. Bounds-checked: `i >= 8` returns `FAC_VALUE_ZERO` | The boilerplate fills `inputs[]`; graph code reads `inputs[i]` |
+| `FAC_mixes_update_mix_inputs` | Refreshes all 6 inputs from the receiver: normalizes `0…1000` → `-1000…+1000`, applies the cached per-input reversal, forces a disabled input (channel `0`) to `FAC_VALUE_ZERO` | **The boilerplate**, once, at the top. Never call it from graph code |
+| `FAC_mixes_GET_input(i)` | The normalized value of input *i*. Bounds-checked: `i >= 6` returns `FAC_VALUE_ZERO` | The boilerplate fills `inputs[]`; graph code reads `inputs[i]` |
+| `FAC_mixes_GET_param(i)` | Numeric parameter *i* (`int16_t`, `-32768…+32767`) set from the FAC Tool, e.g. a PID gain. Not normalized: its meaning is up to the mix. Cached by `FAC_mixes_init()` (changes on *apply*). Bounds-checked: `i >= 4` returns `0` | Graph code, through the **Mix param** node |
 | `FAC_mixes_update_mix_outputs(out)` | Copies the local `outputs[]` into the shared `Mixes` struct the mapper reads. **Must be the last statement** | **The boilerplate**, once, at the end |
 | `FAC_mixes_GET_output(i)` | Reads back a published output. Bounds-checked. Of no use to graph code — the local `outputs[]` array holds the current pass's values, the struct still holds the previous pass's until the write-back |
 

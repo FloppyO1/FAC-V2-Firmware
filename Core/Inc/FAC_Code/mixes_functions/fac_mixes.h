@@ -33,7 +33,8 @@
 //extern uint32_t map_uint32(uint32_t x, uint32_t in_min, uint32_t in_max, uint32_t out_min, uint32_t out_max);
 extern int32_t map_int32(int32_t x, int32_t in_min, int32_t in_max, int32_t out_min, int32_t out_max);
 
-#define MIXES_MAX_INPUTS_NUMBER 8
+#define MIXES_MAX_INPUTS_NUMBER 6
+#define MIXES_MAX_PARAMS_NUMBER 4
 #define MIXES_MAX_OUTPUTS_NUMBER 10
 
 typedef struct Mixes {
@@ -41,6 +42,7 @@ typedef struct Mixes {
 	uint8_t mix_input_channels_number[MIXES_MAX_INPUTS_NUMBER];				// input channels number given by settings (chennale number not channel values)
 	fac_value_t mix_input[MIXES_MAX_INPUTS_NUMBER];				// input values (value of the channel not of the channel number) [-1000, +1000]
 	uint8_t mix_input_reversed[MIXES_MAX_INPUTS_NUMBER];			// boolean value that indicates if the INPUT is reversed or not
+	int16_t mix_param[MIXES_MAX_PARAMS_NUMBER];					// numbers set from the FAC Tool (ex: PID gains), cached by init()
 	fac_value_t mix_output[MIXES_MAX_OUTPUTS_NUMBER];					// output calculated from the mix's logics [-1000, +1000]
 } Mixes;
 
@@ -54,6 +56,7 @@ enum FAC_MIXES_ID {			// 3) of HOW TO MAKE A MIX
 
 fac_value_t FAC_mixes_GET_output(uint8_t outputNumber);
 fac_value_t FAC_mixes_GET_input(uint8_t inputNumber);
+int16_t FAC_mixes_GET_param(uint8_t paramNumber);
 void FAC_mixes_update_mix_inputs(void);
 void FAC_mixes_update_mix_outputs(fac_value_t mix_output[]);
 void FAC_mix_update(void);

@@ -55,8 +55,14 @@
 // The version bump does change FIRMWARE_VERSION_TAG though, and FAC_settings_init rewrites the
 // eeprom with the defaults whenever that tag moves: the user configuration is reset to defaults on
 // the first boot after this update, which the 10 fast boot blinks announce
+// VERSION NOTE 2.2.0:
+// A mix has 6 inputs instead of 8. The codes of inputs 7 and 8 (channel and reversal) now hold 4
+// numeric parameters of the mix (FAC_SETTINGS_CODE_MIX_PARAM1..4, int16_t), read by a mix with
+// FAC_mixes_GET_param(). Settings renumbered: the reversals of inputs 1..6 moved to codes 27..32,
+// the parameters are 33..36; the table still has 64 codes and every other code is unchanged.
+// The FAC Tool picks the right table from the version. Settings reset to defaults on the first boot
 #define FIRMWARE_VERSION_MAJOR 2	// [MAX 9] 	add one here, if the changes are substantial and not backwards compatible
-#define FIRMWARE_VERSION_MINOR 1	// [MAX 99] add one here, if new backwards compatible features have been added
+#define FIRMWARE_VERSION_MINOR 2	// [MAX 99] add one here, if new backwards compatible features have been added
 #define FIRMWARE_VERSION_PATCH 0	// [MAX 99] add one here, if any issues have been fixed without adding any features
 
 #define FIRMWARE_VERSION_TAG  (uint8_t)((FIRMWARE_VERSION_MAJOR * 101U + FIRMWARE_VERSION_MINOR * 7U + FIRMWARE_VERSION_PATCH * 3U) % 255U)
