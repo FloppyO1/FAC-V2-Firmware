@@ -60,8 +60,6 @@ static const uint8_t __attribute__((unused)) mix_id = FAC_MIX_SIMPLE_TANK;// 3) 
 //#define INPUT_NOT_USED 3
 //#define INPUT_NOT_USED 4
 //#define INPUT_NOT_USED 5
-//#define INPUT_NOT_USED 6
-//#define INPUT_NOT_USED 7
 
 /* OUTPUTs DESCRIPTION:
  * Uncomment the output you want to use and rename it

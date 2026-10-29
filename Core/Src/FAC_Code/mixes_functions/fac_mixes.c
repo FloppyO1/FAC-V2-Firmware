@@ -90,6 +90,16 @@ fac_value_t FAC_mixes_GET_input(uint8_t inputNumber) {
 }
 
 /*
+ * @brief	Get one of the numeric parameters of the mix (0 based), set from the FAC Tool
+ * @note	Cached by init(), so a change takes effect on the next apply. Out of range returns 0
+ */
+int16_t FAC_mixes_GET_param(uint8_t paramNumber) {
+	if (paramNumber >= MIXES_MAX_PARAMS_NUMBER)
+		return 0;
+	return mixes.mix_param[paramNumber];
+}
+
+/*
  * @brief		Take all the outputs value given by the mix and copy them into the mixes output array
  * @IMPORTANT	!!!! MUST BE CALLED AFTER EACH CALL OF THE MIX UPDATE !!!!
  * @note		this function will not modify the value of the single mix output array
@@ -169,6 +179,11 @@ void FAC_mixes_init(void) {
 				FAC_settings_GET_value(
 						FAC_SETTINGS_CODE_MIX_INPUT1_REVERSED + i));
 		mixes.mix_input[i] = FAC_VALUE_ZERO;
+	}
+
+	for (int i = 0; i < MIXES_MAX_PARAMS_NUMBER; i++) {	// the u16 setting holds an int16
+		mixes.mix_param[i] = (int16_t) FAC_settings_GET_value(
+				FAC_SETTINGS_CODE_MIX_PARAM1 + i);
 	}
 
 	for (int i = 0; i < MIXES_MAX_OUTPUTS_NUMBER; i++) {// set all output to 0 and set them to non reversed

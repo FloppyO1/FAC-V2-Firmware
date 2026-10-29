@@ -210,7 +210,7 @@ Channel 3 is special-cased: as the throttle stick usually has no return spring, 
 
 | | Mix | Special function |
 |---|---|---|
-| Inputs | up to 8 | exactly 1 |
+| Inputs | up to 6, plus 4 numeric parameters | exactly 1 |
 | Outputs | up to 10 | exactly 1 |
 | Concurrency | **exactly one active** (`ACTIVE_MIX` setting) | up to **20 simultaneously** |
 | Disabled when | — | its input channel setting is `0` |
@@ -459,18 +459,21 @@ void        FAC_mix_update(void);
 void        FAC_mixes_update_mix_inputs(void);
 void        FAC_mixes_update_mix_outputs(fac_value_t mix_output[]);
 fac_value_t FAC_mixes_GET_input (uint8_t inputNumber);          // 0-based
+int16_t     FAC_mixes_GET_param (uint8_t paramNumber);          // 0-based, since 2.2.0
 fac_value_t FAC_mixes_GET_output(uint8_t outputNumber);         // 0-based
 ```
 
 | Function | Description |
 |---|---|
-| `FAC_mixes_init` | Loads the active mix ID and per-input channel/reversal settings; zeroes inputs and outputs. Requires settings to be loaded first. |
+| `FAC_mixes_init` | Loads the active mix ID, the per-input channel/reversal settings and the 4 numeric parameters; zeroes inputs and outputs. Requires settings to be loaded first. |
 | `FAC_mix_update` | Dispatches to the active mix's update function. Add a `case` here for each new mix. |
-| `FAC_mixes_update_mix_inputs` | Refreshes all 8 inputs from the receiver, normalising `0…1000` → `-1000…+1000` with `FAC_math_from_range` and applying per-input reversal. The identity `input = 2×channel - 1000` holds exactly, so full travel is reachable at both ends and the stick centre `500` gives exactly `0` from the values cached by `init()`. Disabled inputs (channel `0`) become `FAC_VALUE_ZERO`. Called by the mix boilerplate. |
+| `FAC_mixes_update_mix_inputs` | Refreshes all 6 inputs from the receiver, normalising `0…1000` → `-1000…+1000` with `FAC_math_from_range` and applying per-input reversal. The identity `input = 2×channel - 1000` holds exactly, so full travel is reachable at both ends and the stick centre `500` gives exactly `0` from the values cached by `init()`. Disabled inputs (channel `0`) become `FAC_VALUE_ZERO`. Called by the mix boilerplate. |
 | `FAC_mixes_update_mix_outputs` | Copies a mix's local output array into the shared struct. **Must be called at the end of every mix update.** |
 | `FAC_mixes_GET_input` / `_GET_output` | Read the shared normalised arrays. Both bounds-check the index and return `FAC_VALUE_ZERO` when it is out of range — the mapper can reach them with an invalid link value (issue #17). |
 
-Both the input channel and the reversal flag are **cached at `init()`**, so changing either through USB takes effect on the next *apply*, not on the write itself.
+| `FAC_mixes_GET_param` | One of the 4 numeric parameters of the mix (`FAC_SETTINGS_CODE_MIX_PARAM1..4`, codes 33–36, the `u16` setting holds an `int16_t`). Out of range returns `0`. Since 2.2.0. |
+
+The input channel, the reversal flag and the parameters are **cached at `init()`**, so changing any of them through USB takes effect on the next *apply*, not on the write itself.
 
 ### 8.8 `fac_functions` — special-function framework
 

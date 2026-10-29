@@ -61,8 +61,17 @@ static const uint8_t __attribute__((unused)) mix_id = FAC_MIX_NAME;						// 3) o
 //#define INPUT_NOT_USED 3
 //#define INPUT_NOT_USED 4
 //#define INPUT_NOT_USED 5
-//#define INPUT_NOT_USED 6
-//#define INPUT_NOT_USED 7
+
+/* PARAMs DESCRIPTION:
+ * Numbers (int16_t, -32768 to +32767) set from the FAC Tool, ex: the gains of a PID.
+ * Uncomment the parameter you want to use and rename it (ex: #define PARAM_KP 0)
+ * !! DONT'T CHANGE THE NUMBER ASIGNED !!
+ * Read it with FAC_mixes_GET_param(PARAM_<NAME>): the value changes on the next apply settings
+ */
+//#define PARAM_NOT_USED 0
+//#define PARAM_NOT_USED 1
+//#define PARAM_NOT_USED 2
+//#define PARAM_NOT_USED 3
 
 /* OUTPUTs DESCRIPTION:
  * Uncomment the output you want to use and rename it
